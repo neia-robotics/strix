@@ -24,6 +24,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
+import numpy as np
 
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_ui.html")
 
@@ -186,21 +187,51 @@ class MjpegStreamServer:
         return Handler
 
 
-def annotate(frame, detections, used_ids: set[int], result, reject: str | None, hud: list[str]):
-    """Draws tag outlines + IDs and a status HUD onto a copy of the frame."""
+def tag_box(d, camera_matrix, dist_coeffs, tag_size_m: float):
+    """Image points of a cube standing on one tag (tag face first, then the face toward
+    the camera), from that tag's own pose. None if the pose can't be solved."""
+    h = tag_size_m / 2.0
+    # SOLVEPNP_IPPE_SQUARE's required object order (TL, TR, BR, BL); the detector
+    # reports corners BL, BR, TR, TL as seen looking at the tag.
+    face = np.array([[-h, h, 0.0], [h, h, 0.0], [h, -h, 0.0], [-h, -h, 0.0]])
+    img = np.array([[d.getCorner(k).x, d.getCorner(k).y] for k in (3, 2, 1, 0)], dtype=np.float64)
+    ok, rvec, tvec = cv2.solvePnP(face, img, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+    if not ok:
+        return None
+    # Extrude toward the camera, whichever way the tag's z axis points.
+    toward = -1.0 if cv2.Rodrigues(rvec)[0][2, 2] > 0 else 1.0
+    cube = np.vstack([face, face + [0.0, 0.0, toward * tag_size_m]])
+    pts, _ = cv2.projectPoints(cube, rvec, tvec, camera_matrix, dist_coeffs)
+    pts = pts.reshape(-1, 2)
+    if not np.all(np.isfinite(pts)):
+        return None
+    return pts
+
+
+def annotate(frame, detections, used_ids: set[int], result, reject: str | None, hud: list[str],
+             camera_matrix=None, dist_coeffs=None, tag_size_m: float | None = None):
+    """Draws tag outlines + IDs and a status HUD onto a copy of the frame. With a
+    calibration (camera_matrix, dist_coeffs, tag_size_m), also a 3D box on each tag."""
     img = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame.copy()
     h, w = img.shape[:2]
     scale = max(0.5, w / 1280.0)
     thick = max(1, int(round(2 * scale)))
     font = cv2.FONT_HERSHEY_SIMPLEX
+    boxes = camera_matrix is not None and dist_coeffs is not None and tag_size_m
 
     for d in detections:
         pts = [(int(d.getCorner(k).x), int(d.getCorner(k).y)) for k in range(4)]
         color = (0, 220, 0) if d.getId() in used_ids else (0, 165, 255)  # green used, orange filtered
         for k in range(4):
             cv2.line(img, pts[k], pts[(k + 1) % 4], color, thick, cv2.LINE_AA)
+        cube = tag_box(d, camera_matrix, dist_coeffs, tag_size_m) if boxes else None
+        if cube is not None:
+            c = [(int(x), int(y)) for x, y in cube]
+            for k in range(4):
+                cv2.line(img, c[k], c[k + 4], color, max(1, thick - 1), cv2.LINE_AA)  # pillars
+                cv2.line(img, c[k + 4], c[(k + 1) % 4 + 4], color, thick, cv2.LINE_AA)  # top face
         cv2.circle(img, pts[0], thick * 2, (0, 0, 255), -1)  # corner 0 (bottom-left)
-        label = f"ID {d.getId()}"
+        label = f"id {d.getId()}"
         fs = 0.6 * scale
         (tw, th), base = cv2.getTextSize(label, font, fs, max(1, thick - 1))
         x = int(min(p[0] for p in pts))
@@ -215,7 +246,7 @@ def annotate(frame, detections, used_ids: set[int], result, reject: str | None, 
         lines.append(f"pose x={p.X():.2f} y={p.Y():.2f} th={p.rotation().Z() * 57.2958:.1f}deg "
                      f"| tags {len(result.tag_ids)} | {result.avg_tag_distance:.1f} m")
     elif reject:
-        lines.append(f"REJECTED: {reject}")
+        lines.append(f"rejected: {reject}")
 
     line_h = int(26 * scale)
     box_h = line_h * len(lines) + int(10 * scale)
@@ -223,7 +254,7 @@ def annotate(frame, detections, used_ids: set[int], result, reject: str | None, 
     cv2.rectangle(overlay, (0, 0), (w, box_h), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.55, img, 0.45, 0, img)
     for i, text in enumerate(lines):
-        color = (80, 80, 255) if text.startswith("REJECTED") else (240, 240, 240)
+        color = (80, 80, 255) if text.startswith("rejected") else (240, 240, 240)
         cv2.putText(img, text, (int(8 * scale), line_h * (i + 1)), font, 0.6 * scale, color,
                     max(1, thick - 1), cv2.LINE_AA)
     return img

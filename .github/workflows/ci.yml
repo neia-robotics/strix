@@ -18,6 +18,10 @@ jobs:
       - name: Synthetic pose test
         working-directory: owl
         run: python test_synthetic.py
+      - name: Coprocessor stats read from /proc
+        working-directory: owl
+        run: |
+          python -c "import sysinfo, time; sysinfo.snapshot(); time.sleep(0.3); s = sysinfo.snapshot(); assert s['cpu'] and s['memory'] and s['uptime_s'], s; print(s['cpu'], s['memory'])"
 
   tusk-robotpy:
     name: Tusk RobotPy (${{ matrix.season }})

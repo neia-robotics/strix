@@ -134,7 +134,7 @@ class CalibrationSession:
             self.message = f"need at least {MIN_VIEWS} views (have {len(self.views)})"
             return
         self.state = "calibrating"
-        self.message = "calibrating..."
+        self.message = "calibrating…"
         threading.Thread(target=self._calibrate, daemon=True, name="calibrate").start()
 
     def discard_result(self):
@@ -173,10 +173,12 @@ class CalibrationSession:
 
     def process(self, gray: np.ndarray, now: float) -> dict:
         """Detect the board; auto/manual capture. Returns the detection for draw()."""
-        det = {"corners": None, "ids": None, "ok": False}
+        det = {"corners": None, "ids": None, "ok": False, "markers": None}
         if self.state != "capturing":
             return det
-        corners, ids, _, _ = self.detector.detectBoard(gray)
+        corners, ids, marker_corners, marker_ids = self.detector.detectBoard(gray)
+        if marker_ids is not None and len(marker_ids):
+            det["markers"] = ([c.reshape(-1, 2) for c in marker_corners], marker_ids.flatten())
         n = 0 if corners is None or ids is None or len(corners) != len(ids) else len(corners)
         need = max(MIN_CORNERS, int(MIN_CORNER_FRAC * self.total_corners))
         if n < 4:
@@ -279,20 +281,20 @@ class CalibrationSession:
 
     def hint(self) -> str:
         if self.state == "calibrating":
-            return "Calibrating..."
+            return "calibrating…"
         if self.state == "result":
-            return "Review the result, then Save (or Discard and keep capturing)."
+            return "review the result, then save it, or discard it and keep capturing"
         lv = self.live
         need = max(MIN_CORNERS, int(MIN_CORNER_FRAC * self.total_corners))
         if lv["corners"] == 0:
-            return "Hold the board up to the camera."
+            return "hold the board up to the camera"
         if lv["corners"] < need:
-            return "Show more of the board (move back or bring it fully into view)."
+            return "show more of the board: move back or bring all of it into view"
         if not lv["still"]:
-            return "Hold still..."
+            return "hold still…"
         if not lv["novel"]:
-            return "Already have this view: " + self._next_goal()
-        return "Capturing..." if self.auto else "New view. Press Capture."
+            return "already have this view: " + self._next_goal()
+        return "capturing…" if self.auto else "new view: press capture now"
 
     def _next_goal(self) -> str:
         if self.coverage() < GOOD_COVERAGE:
@@ -305,14 +307,14 @@ class CalibrationSession:
                     n = np.count_nonzero(blk)
                     if best_n is None or n < best_n:
                         best, best_n = (c / 3 + 0.1, r / 3 + 0.1), n
-            return f"move the board to the {_region_name(*best)} of the frame."
+            return f"move the board to the {_region_name(*best)} of the frame"
         tc = self.tilt_counts()
         missing = [k for k, n in tc.items() if n < 2]
         if missing:
-            return f"tilt the board ~30 deg ({', '.join(missing)})."
+            return f"tilt the board ~30° ({', '.join(missing)})"
         if len(self.views) < MIN_VIEWS:
-            return "move closer/farther or to a new spot."
-        return "you have enough views. Press Calibrate (more views are fine too)."
+            return "move closer, farther, or to a new spot"
+        return "enough views: press calibrate (more views are fine too)"
 
     def status(self) -> dict:
         tc = self.tilt_counts()
@@ -382,7 +384,7 @@ class CalibrationSession:
             }
             self._undistort_maps = cv2.initUndistortRectifyMap(K, D, None, K, (self.w, self.h), cv2.CV_16SC2)
             self.state = "result"
-            self.message = (f"RMS {rms:.3f} px from {len(views) - len(removed)} views"
+            self.message = (f"rms {rms:.3f} px from {len(views) - len(removed)} views"
                             + (f" ({len(removed)} outlier views dropped)" if removed else ""))
         except Exception as e:  # keep the session usable
             self.state = "capturing"
@@ -394,18 +396,35 @@ class CalibrationSession:
         img = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame.copy()
         if self.state == "result" and self.preview and self._undistort_maps is not None:
             img = cv2.remap(img, *self._undistort_maps, cv2.INTER_LINEAR)
-            self._banner(img, [f"UNDISTORTED PREVIEW  |  RMS {self.result['rms']:.3f} px  |  "
+            self._banner(img, [f"undistorted preview  |  rms {self.result['rms']:.3f} px  |  "
                                "straight lines should look straight"])
             return img
+
+        scale = max(0.6, img.shape[1] / 1280.0)
+        markers = det.get("markers")
+        corners = det.get("corners")
+
+        # Where the board is right now, so the coverage tint doesn't hide it.
+        board_pts = []
+        if markers is not None:
+            board_pts.extend(markers[0])
+        if corners is not None:
+            board_pts.append(corners)
+        board_hull = (cv2.convexHull(np.concatenate(board_pts).astype(np.float32)).astype(np.int32)
+                      if board_pts else None)
 
         # Coverage map: green where captured corners have landed.
         if self._coverage_overlay is None or self._coverage_overlay.shape[:2] != img.shape[:2]:
             mask = (self.covered > 0).astype(np.uint8) * 255
             mask = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
             self._coverage_overlay = mask
+        m = self._coverage_overlay > 0
+        if board_hull is not None:
+            on_board = np.zeros(img.shape[:2], np.uint8)
+            cv2.fillConvexPoly(on_board, board_hull, 1)
+            m &= on_board == 0
         green = np.zeros_like(img)
         green[:, :, 1] = 255
-        m = self._coverage_overlay > 0
         img[m] = (img[m] * 0.7 + green[m] * 0.3).astype(np.uint8)
         for c in range(1, GRID_COLS):
             x = c * img.shape[1] // GRID_COLS
@@ -414,20 +433,41 @@ class CalibrationSession:
             y = r * img.shape[0] // GRID_ROWS
             cv2.line(img, (0, y), (img.shape[1], y), (70, 70, 70), 1)
 
-        scale = max(0.6, img.shape[1] / 1280.0)
-        if det.get("corners") is not None:
-            if not det["ok"]:
-                color = (0, 0, 255)          # red: too little of the board
-            elif not det.get("novel"):
-                color = (160, 160, 160)      # gray: already have this view
+        if corners is not None and det["ok"]:
+            if not det.get("novel"):
+                color = (255, 200, 80)       # light blue: already have this view
             elif not det.get("still"):
-                color = (0, 200, 255)        # yellow: new, hold still
+                color = (0, 210, 255)        # yellow: new, hold still
             else:
                 color = (0, 230, 0)          # green: capturing
-            hull = cv2.convexHull(det["corners"].astype(np.float32)).astype(np.int32)
-            cv2.polylines(img, [hull], True, color, max(1, int(2 * scale)), cv2.LINE_AA)
-            for x, y in det["corners"]:
-                cv2.circle(img, (int(x), int(y)), max(2, int(3 * scale)), color, -1, cv2.LINE_AA)
+        else:
+            color = (0, 0, 255)              # red: too little of the board
+        thick = max(2, int(round(2 * scale)))
+
+        # Each ArUco marker, outlined and labelled (like PhotonVision's calibration view).
+        if markers is not None:
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            for quad, mid in zip(*markers):
+                q = quad.astype(np.int32)
+                cv2.polylines(img, [q], True, color, thick, cv2.LINE_AA)
+                side = float(np.linalg.norm(quad[0] - quad[1]))
+                if side >= 18:
+                    label = str(int(mid))
+                    fs = max(0.35, min(0.6, side / 60.0)) * scale
+                    (tw, th), _ = cv2.getTextSize(label, font, fs, 1)
+                    cx, cy = quad.mean(axis=0)
+                    org = (int(cx - tw / 2), int(cy + th / 2))
+                    cv2.putText(img, label, org, font, fs, (0, 0, 0), 3, cv2.LINE_AA)
+                    cv2.putText(img, label, org, font, fs, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # ChArUco corners (the points the calibration uses) and the board outline.
+        if board_hull is not None:
+            cv2.polylines(img, [board_hull], True, color, max(2, int(round(3 * scale))), cv2.LINE_AA)
+        if corners is not None:
+            r = max(3, int(round(4 * scale)))
+            for x, y in corners:
+                cv2.circle(img, (int(x), int(y)), r + 1, (0, 0, 0), -1, cv2.LINE_AA)
+                cv2.circle(img, (int(x), int(y)), r, color, -1, cv2.LINE_AA)
 
         if now < self._flash_until:
             cv2.rectangle(img, (0, 0), (img.shape[1] - 1, img.shape[0] - 1), (255, 255, 255),
@@ -435,7 +475,7 @@ class CalibrationSession:
 
         tc = self.tilt_counts()
         self._banner(img, [
-            f"CALIBRATING {self.w}x{self.h}  |  views {len(self.views)}/{MIN_VIEWS}  |  "
+            f"calibrating {self.w}x{self.h}  |  views {len(self.views)}/{MIN_VIEWS}  |  "
             f"coverage {self.coverage() * 100:.0f}%  |  tilts L{tc['left']} R{tc['right']} "
             f"U{tc['up']} D{tc['down']}",
             self.hint(),

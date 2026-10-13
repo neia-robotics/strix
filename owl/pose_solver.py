@@ -150,7 +150,7 @@ class PoseSolver:
         self.last_reject = None
         dets = self.filter_detections(detections)
         if not dets:
-            self.last_reject = "no usable tags (decision margin / hamming / unknown ID)" if detections else None
+            self.last_reject = "no usable tags (decision margin, hamming or unknown id)" if detections else None
             return None
 
         ids = [d.getId() for d in dets]
@@ -166,7 +166,7 @@ class PoseSolver:
                 obj, img, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_IPPE
             )
             if n < 1:
-                self.last_reject = "solvePnP failed"
+                self.last_reject = "pose solve failed"
                 return None
             errs = np.asarray(errs).flatten()
             order = [int(i) for i in np.argsort(errs)]
@@ -182,7 +182,7 @@ class PoseSolver:
                 obj, img, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_SQPNP
             )
             if n < 1:
-                self.last_reject = "solvePnP failed"
+                self.last_reject = "pose solve failed"
                 return None
             candidates = [(rvecs[0], tvecs[0], float(np.asarray(errs).flatten()[0]))]
 

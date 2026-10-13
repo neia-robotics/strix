@@ -84,6 +84,8 @@ def main():
     ctx = mp.get_context("spawn")
     q = ctx.Queue(maxsize=256)
     procs, ctrls = {}, {}
+    restarts = {c.id: 0 for c in cfg.cameras}  # for the web page's diagnostics tab
+    owl_started = time.time()
 
     # Every camera's page lists all cameras so one page can switch between them.
     peers = [{"name": c.name, "port": c.stream_port} for c in cfg.cameras]
@@ -287,9 +289,27 @@ def main():
             for cam in cfg.cameras:  # restart crashed camera processes with current settings
                 if not procs[cam.id].is_alive():
                     print(f"[{cam.name}] process died, restarting", flush=True)
+                    restarts[cam.id] += 1
                     start(cam)
                     ctrls[cam.id].put(initial_settings(cam.id))
             ips = ip_watcher.ips  # IP can change after boot (robot radio DHCP); refreshed in background
+            # Diagnostics for the web pages: NetworkTables and every camera process.
+            system = {
+                "started": owl_started,
+                "ips": ips,
+                "nt": {
+                    "mode": "standalone server" if cfg.standalone else "client",
+                    "target": None if cfg.standalone else (cfg.server or f"team {cfg.team}"),
+                    "connected": bool(inst.isConnected()) or cfg.standalone,
+                    "peers": [{"id": c.remote_id, "ip": c.remote_ip} for c in inst.getConnections()],
+                    "time_synced": time_synced[0],
+                },
+                "throttle_fps": throttle,
+                "cameras": [{"name": c.name, "port": c.stream_port, "alive": procs[c.id].is_alive(),
+                             "pid": procs[c.id].pid, "restarts": restarts[c.id]} for c in cfg.cameras],
+            }
+            for cam in cfg.cameras:
+                ctrls[cam.id].put({"_system": system})
             if ips != last_ips:
                 last_ips = ips
                 for (cam_id, path), pub in stream_pubs.items():

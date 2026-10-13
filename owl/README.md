@@ -135,7 +135,7 @@ Low exposure matters more than anything else for tag detection on a moving robot
 Calibrate from the settings page. A camera boots and streams without a calibration; it just doesn't publish poses (the header says **NOT CALIBRATED**) until it has one for its current resolution. Pick the resolution first: each resolution needs its own calibration.
 
 1. **Board.** The default is 6328's Northstar board (12×9 squares, 5×5 markers, 30/23 mm); a PhotonVision 8×8 preset is there too, or type in your own. **Print board** gives an image that prints at true size at 100% scale. The 6328 board is 360×270 mm, bigger than letter, so print it on 11×17 or show it full-screen on a flat monitor. Mount it flat; measure a square.
-2. **Start calibration.** Pose output pauses for that camera. Hold the board in view and keep it still for a moment: a view is captured automatically whenever the board is held still in a pose that's new (different spot, distance or tilt). The stream shows a green coverage map and a hint for what to do next (e.g. "move the board to the top left", "tilt the board ~30 deg (left, up)"). **Capture now** / **Undo** / **Clear** are there for manual control.
+2. **Start calibration.** Pose output pauses for that camera. Hold the board in view and keep it still for a moment: a view is captured automatically whenever the board is held still in a pose that's new (different spot, distance or tilt). The stream outlines every ArUco marker with its ID and marks each ChArUco corner, colored by state (red: too little of the board, light blue: already have this view, yellow: new view, hold still, green: capturing), plus a green coverage map and a hint for what to do next (e.g. "move the board to the top left", "tilt the board ~30 deg (left, up)"). **Capture now** / **Undo** / **Clear** are there for manual control.
 3. Aim for 15+ views, 65%+ coverage including the corners, and at least two views tilted each way. Then **Calibrate**.
 4. **Review.** RMS error (under 0.5 px is good), focal length and principal point with their uncertainty, field of view, and error per view. Views much worse than the rest (blur, bad detections) are dropped automatically and the calibration re-run. **Preview undistorted** should make straight edges look straight.
 5. **Save calibration.** Written to `calibrations/<camera>_<W>x<H>.json` and used immediately; no restart.
@@ -144,7 +144,14 @@ Tick **Wide-angle lens** before starting if your lens is wider than ~100° (Open
 
 ## 5. Settings page, live tuning, and saving
 
-**The page.** `http://<pi-ip>:1181/` (any camera's port works; `#cam=<name>` in the URL opens that camera). The header shows **camera fps** (what the camera delivers), **processed** fps, detect time and calibration status. The stream has two views: *Annotated* (green outlines for tags used in the pose, orange for filtered, red dot on corner 0, and the pose or **the reason a frame was rejected**) and *Raw*.
+**The page.** `http://<pi-ip>:1181/` (any camera's port works). It has four tabs, and the URL remembers the tab and camera (`#page=tuning&cam=<name>`):
+
+- **cameras**: every camera at once, each with its live stream, fps, pose or reject reason, and calibration state.
+- **tuning**: the chosen camera's stream with settings in three sub-tabs, **input** (resolution, exposure, gain), **apriltag** (detector and filters) and **output** (std dev factor, stream fps). Under the stream, click the pose line to open the **targets** table: every tag in the frame with yaw, pitch, skew, area, distance, decision margin, and whether it was used.
+- **calibration**: board setup, capture and results (below).
+- **coprocessor**: diagnostics: CPU per core, temperatures, memory, disk, uptime, IP addresses, the NetworkTables connection, every camera process (running, restarts, detector, fps) and software versions.
+
+The header shows **camera fps** (what the camera delivers), **processed** fps, **pose fps**, detect time and calibration status for the chosen camera. The stream has two views: *Annotated* (green outlines for tags used in the pose, orange for filtered, red dot on corner 0, a 3D box on each tag once the camera is calibrated, and the pose or **the reason a frame was rejected**) and *Raw*.
 
 Streams are full resolution and only encode while someone is watching, so an unwatched stream costs nothing; `stream_max_fps` caps encoding while watched. Both streams are registered under `/CameraPublisher`, so Elastic's camera widget finds them. The field network caps robot bandwidth, so keep streams closed during matches.
 
@@ -161,7 +168,7 @@ Streams are full resolution and only encode while someone is watching, so an unw
 
 Camera settings apply to that camera only; the rest apply to all cameras. For exposure and gain, **-1 means auto** (NT has no null). Exposure uses the camera's native units (often 100 µs steps; the page reads the range from the camera).
 
-**Saving.** Changes apply immediately but are **not** saved until you press **Save to config** (or set `/Vision/settings/save` true). The Pi writes `config.json` atomically, so a power cut mid-save can't corrupt it. On startup `config.json` always wins, so unsaved experiments vanish on restart. After a tuning session, pull the Pi's `config.json` into the repo.
+**Saving.** Changes apply immediately but are **not** saved until you press **Save settings** (or set `/Vision/settings/save` true). The Pi writes `config.json` atomically, so a power cut mid-save can't corrupt it. On startup `config.json` always wins, so unsaved experiments vanish on restart. After a tuning session, pull the Pi's `config.json` into the repo.
 
 NT status per camera is under `/Vision/cameras/<name>/`: `fps`, `processMs`, `tagFps`, `connected`, `lastReject`, and `robotPose` (a plain Pose3d you can drag onto AdvantageScope's field view). The robot reads `/Vision/observations`.
 

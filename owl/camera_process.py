@@ -19,6 +19,8 @@ and detects tags but publishes no poses until it's calibrated from its page.
 from __future__ import annotations
 
 import dataclasses
+import json
+import math
 import os
 import queue
 import sys
@@ -35,6 +37,7 @@ from config import (CameraConfig, calibration_path, find_calibration, load_field
                     robot_to_camera_transform)
 from messages import PoseObservation, pose_to_tuple
 from pose_solver import DetectorSettings, PoseSolver, SolverSettings, make_detector
+import sysinfo
 from stream_server import MjpegStreamServer, annotate
 
 STATS_PERIOD_S = 1.0
@@ -254,6 +257,7 @@ class CameraWorker:
         self.fps_shown = self.proc_shown = 0.0
         self.last_reject = ""
         self.last_res = None  # last accepted pose this stats period (for the page)
+        self.last_targets = None  # (detections, used tag ids, (w, h)) from the latest detection
         self.last_stream = 0.0
         self.last_detect = 0.0
 
@@ -261,7 +265,8 @@ class CameraWorker:
         if stream_cfg.get("enabled", True):
             self.stream = MjpegStreamServer(
                 cam.name, cam.stream_port, int(stream_cfg.get("jpeg_quality", 80)),
-                self.web_state, self.web_action, {"/api/board.png": self.board_image})
+                self.web_state, self.web_action,
+                {"/api/board.png": self.board_image, "/api/system": self.system_info})
         self.grabber = LatestFrameGrabber(cam)
 
     def log(self, msg: str) -> None:
@@ -283,7 +288,59 @@ class CameraWorker:
         return {"name": self.cam.name, "cameras": self.peers, "values": ui["values"],
                 "stats": ui["stats"], "ranges": ui["ranges"], "modes": ui["modes"],
                 "calibration": cal_state, "calib_info": self.calib_info,
-                "calib_msg": self.calib_msg}
+                "calib_msg": self.calib_msg, "detector": self.detector_text()}
+
+    def system_info(self):
+        """/api/system: this coprocessor's stats, plus what the main process reports
+        (NetworkTables, every camera process) and this camera's detector."""
+        info = sysinfo.snapshot()
+        info["owl"] = self.ui["values"].get("_system", {})
+        info["camera"] = {"name": self.cam.name, "detector": self.detector_text()}
+        return "application/json", json.dumps(info).encode()
+
+    def detector_text(self) -> str:
+        if self.det_settings.backend == "cpu":
+            return "cpu (wpilib)"
+        det = self.detector
+        return f"{det.backend} on gpu" if det.on_gpu else "cuda requested, running on cpu"
+
+    def targets(self) -> list[dict]:
+        """Per-tag rows for the page's targets table (PhotonVision-style)."""
+        if not self.last_targets:
+            return []
+        detections, used, (w, h) = self.last_targets
+        s = self.solver.s
+        rows = []
+        for d in detections:
+            tid = d.getId()
+            pts = np.array([[d.getCorner(k).x, d.getCorner(k).y] for k in range(4)], dtype=np.float64)
+            area = abs(cv2.contourArea(pts.astype(np.float32))) / (w * h) * 100.0
+            bl, br = pts[0], pts[1]
+            skew = math.degrees(math.atan2(br[1] - bl[1], br[0] - bl[0]))
+            row = {"id": tid, "area": round(area, 3), "skew": round(skew, 1),
+                   "margin": round(d.getDecisionMargin(), 1), "yaw": None, "pitch": None, "dist": None}
+            if self.K is not None:
+                c = cv2.undistortPoints(np.array([[[d.getCenter().x, d.getCenter().y]]]), self.K, self.D).ravel()
+                row["yaw"] = round(-math.degrees(math.atan(c[0])), 2)  # + left (WPILib, CCW)
+                row["pitch"] = round(-math.degrees(math.atan2(c[1], math.hypot(1.0, c[0]))), 2)  # + up
+                half = s.tag_size_m / 2.0
+                obj = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]])
+                ok, _, tvec = cv2.solvePnP(obj, pts[[3, 2, 1, 0]], self.K, self.D, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+                if ok:
+                    row["dist"] = round(float(np.linalg.norm(tvec)), 2)
+            if tid in used:
+                row["status"] = "used"
+            elif tid not in self.solver.tag_corners:
+                row["status"] = "not on field"
+            elif d.getHamming() > s.max_hamming:
+                row["status"] = f"hamming {d.getHamming()}"
+            elif d.getDecisionMargin() < s.min_decision_margin:
+                row["status"] = "low margin"
+            else:
+                row["status"] = "frame rejected"
+            rows.append(row)
+        rows.sort(key=lambda r: r["id"])
+        return rows
 
     def web_action(self, kind, data=None) -> None:
         if kind == "calib":
@@ -401,7 +458,7 @@ class CameraWorker:
             path = calibration_path(self.cam, calib.w, calib.h)
             saved = calib.save(path)
             self.calib = None
-            self.calib_msg = f"saved {os.path.basename(path)} (RMS {saved['rms']:.3f} px)"
+            self.calib_msg = f"saved {os.path.basename(path)} (rms {saved['rms']:.3f} px)"
             self.log(self.calib_msg)
             self.active_res = None  # reload on the next frame
 
@@ -457,7 +514,8 @@ class CameraWorker:
                             "processMs": self.proc_shown, "tagFps": self.tagged / dt,
                             "lastReject": self.last_reject, "pose": pose_txt, "cameraFps": cam_fps,
                             "resolution": f"{res[0]}x{res[1]}" if res else None,
-                            "calibrated": self.K is not None, "throttled": self.throttle_active()}
+                            "calibrated": self.K is not None, "throttled": self.throttle_active(),
+                            "targets": self.targets()}
         self.last_res = None  # only show a pose accepted during this stats period
         self.frames = self.tagged = 0
         self.proc_total = 0.0
@@ -497,7 +555,7 @@ class CameraWorker:
         detections = self.detector.detect(self._gray(frame))
         res = None
         if self.K is None:
-            reject = f"NOT CALIBRATED at {res_now[0]}x{res_now[1]} - calibrate on this page"
+            reject = f"not calibrated at {res_now[0]}x{res_now[1]}: calibrate it on the calibration tab"
             self.last_reject = reject
         elif detections:
             res = self.solver.solve(detections, self.K, self.D, self.r2c, self.std_dev_factor)
@@ -505,6 +563,7 @@ class CameraWorker:
         else:
             reject = None
         self._count_frame(t0)
+        self.last_targets = (detections, set(res.tag_ids) if res else set(), res_now)
         if res is None:
             if self.K is not None and self.solver.last_reject:
                 self.last_reject = self.solver.last_reject
@@ -526,7 +585,8 @@ class CameraWorker:
             hud = self._hud(res_now)
             if self.throttle_fps > 0:
                 hud.append(f"robot disabled: {self.throttle_fps:g} fps throttle paused while this page is open")
-            stream.submit("stream", annotate(frame, detections, used, res, reject, hud))
+            stream.submit("stream", annotate(frame, detections, used, res, reject, hud,
+                                            self.K, self.D, self.solver.s.tag_size_m))
 
     @staticmethod
     def _gray(frame):
@@ -546,4 +606,4 @@ class CameraWorker:
         if self.det_settings.backend == "cpu":
             return f"decimate {self.det_settings.quad_decimate:g}"
         det = self.detector
-        return f"{det.backend} detector" if det.on_gpu else "cuda detector off (on CPU)"
+        return f"{det.backend} detector" if det.on_gpu else "cuda detector off (on cpu)"

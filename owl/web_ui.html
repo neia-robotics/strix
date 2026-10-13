@@ -3,223 +3,588 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vision Camera</title>
+<title>owl</title>
 <style>
+  /* NEIA Robotics design system (pitch guide) with Choate's gold for the co-brand mark.
+     Owl is served on the robot network with no internet: system fonts only. */
   :root {
-    --bg: #101214; --panel: #1a1d21; --line: #2c3036; --text: #e4e6e9; --muted: #8b929b;
-    --accent: #4da3ff; --good: #3ecf6e; --warn: #f0a33a; --bad: #ff5c5c;
+    --charcoal: #383838;   /* page */
+    --tile: #444444;       /* filled tiles */
+    --line: #555555;       /* dividers */
+    --text: #ffffff;
+    --muted: #b9b9b9;
+    --magenta: #ca007b;    /* NEIA primary */
+    --pink: #e98ac0;       /* NEIA secondary */
+    --gold: #e9bf2b;       /* Choate */
+    --navy: #18233a;       /* Choate */
+    /* Status, kept apart from the brand colors (and from Choate gold). */
+    --good: #3ecf6e; --warn: #f2853a; --bad: #ff5c5c;
+    --r-tile: 10px; --r-ctl: 8px;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
-           border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  #camsel { font-size: 16px; font-weight: 600; padding: 4px 8px; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--charcoal); color: var(--text);
+         font: 15px/1.45 Avenir, "Avenir Next", "Nunito Sans", "Segoe UI", system-ui, sans-serif; }
+  :focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+
+  /* ---- co-brand strip + header ---- */
+  .strip { height: 4px; background: linear-gradient(90deg, var(--magenta) 0 50%, var(--gold) 50% 100%); }
+  header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+           gap: 16px 28px; padding: 14px 24px; border-bottom: 1px solid var(--line); }
+  .lockup { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .marks { display: flex; align-items: center; }
+  .marks img { width: 40px; height: 40px; display: block; }
+  .marks img + img { margin-left: -6px; }
+  .word { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+  .word b { font-size: 22px; font-weight: 800; letter-spacing: -0.01em; }
+  .word small { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .word small .n { color: var(--pink); } .word small .c { color: var(--gold); }
+
+  .camera { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+  .pick { display: inline-flex; align-items: center; gap: 8px; background: var(--tile);
+          border-radius: 999px; padding: 4px 6px 4px 12px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.ok { background: var(--good); } .dot.bad { background: var(--bad); }
-  .stats { color: var(--muted); font-variant-numeric: tabular-nums; display: flex; gap: 14px; flex-wrap: wrap; }
-  .stats b { color: var(--text); font-weight: 600; }
-  .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line);
-           color: var(--muted); font-variant-numeric: tabular-nums; }
+  #camsel { font: inherit; font-size: 16px; font-weight: 700; color: var(--text); background: transparent;
+            border: 0; padding: 4px 6px; border-radius: 999px; }
+  #camsel:disabled { opacity: 1; appearance: none; -webkit-appearance: none; padding-right: 10px; }
+  #camsel option { color: #000; }
+  .badge { padding: 4px 12px; border-radius: 999px; font-size: 13px; border: 1px solid var(--line);
+           color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .badge.good { color: var(--good); border-color: var(--good); }
   .badge.bad { color: var(--bad); border-color: var(--bad); }
-  .badge.warn { color: var(--warn); border-color: var(--warn); }
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 16px; }
-  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
-  .view { min-width: 0; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 8px; }
-  .tabs button { background: var(--panel); color: var(--muted); border: 1px solid var(--line);
-                 padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit; }
-  .tabs button.on { color: var(--text); border-color: var(--accent); }
-  .view img { width: 100%; display: block; background: #000; border-radius: 6px; min-height: 120px; }
-  .msg { margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--panel);
-         border: 1px solid var(--line); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  .msg.reject { border-color: var(--warn); color: var(--warn); }
-  .msg.pose { border-color: var(--good); color: var(--good); }
-  .msg.bad { border-color: var(--bad); color: var(--bad); }
-  aside, #groups { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
-  section h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
-               display: flex; justify-content: space-between; gap: 8px; }
-  section h2 small { color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 400; }
-  .row { margin-bottom: 12px; } .row:last-child { margin-bottom: 0; }
-  .row .top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .badge.warn { color: var(--warn); border-color: var(--warn); border-style: dashed; }
+
+  /* The big numbers: readable from across the pit. */
+  .stats { display: grid; grid-template-columns: repeat(4, auto); gap: 0 24px; text-align: right; }
+  .stat b { display: block; font-size: 30px; font-weight: 800; line-height: 1;
+            font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .stat span { color: var(--muted); font-size: 12.5px; }
+
+  /* ---- layout ---- */
+  /* ---- page tabs + save ---- */
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap;
+         padding: 0 24px; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
+         background: var(--charcoal); }
+  .pages { display: flex; gap: 26px; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .pages::-webkit-scrollbar { display: none; }
+  .pages button { flex: none; }
+  .pages button { background: none; border: 0; color: var(--muted); font: inherit; font-size: 17px;
+                  padding: 14px 0 11px; border-bottom: 3px solid transparent; cursor: pointer; }
+  .pages button:hover { color: var(--text); }
+  .pages button.on { color: var(--text); font-weight: 700; border-bottom-color: var(--magenta); }
+  .savebar { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+  #status { color: var(--muted); font-size: 14px; }
+  #status.dirty { color: var(--warn); } #status.err { color: var(--bad); }
+
+  /* ---- layout ---- */
+  main { padding: 20px 24px 32px; max-width: 1680px; margin: 0 auto; }
+  .page[hidden] { display: none; }
+  .work { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px; align-items: start; }
+  .view { min-width: 0; position: sticky; top: 72px; }
+  .panel { min-width: 0; }
+  .seg { display: inline-flex; background: var(--tile); border-radius: 999px; padding: 3px; margin-bottom: 12px; }
+  .seg button { background: transparent; color: var(--muted); border: 0; padding: 6px 16px;
+                border-radius: 999px; cursor: pointer; font: inherit; }
+  .seg button.on { background: var(--charcoal); color: var(--text); font-weight: 700; }
+  .stage { background: #000; border-radius: var(--r-tile); overflow: hidden; }
+  .view img { width: 100%; display: block; min-height: 160px; }
+  .msg { margin-top: 12px; padding: 10px 14px; border-radius: var(--r-ctl); background: var(--tile);
+         border-left: 4px solid var(--line); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .msg.reject { border-left-color: var(--warn); }
+  .msg.pose { border-left-color: var(--good); }
+  .msg.bad { border-left-color: var(--bad); }
+
+  #groups { display: flex; flex-direction: column; min-width: 0; }
+  h2 { margin: 0 0 12px; font-size: 22px; font-weight: 700;
+       display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  h2 small { color: var(--muted); font-size: 13px; font-weight: 400; text-transform: none; }
+
+  /* Calibration is the one task on this page: a filled tile. Settings are a quiet list. */
+  #calsec { background: var(--tile); border-radius: var(--r-tile); padding: 18px; }
+  #groups section { padding: 18px 0; border-top: 1px solid var(--line); }
+  #groups section:first-child { border-top: 0; padding-top: 0; }
+
+  /* ---- cameras page: every camera at once ---- */
+  .camgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 20px; }
+  .tile { background: var(--tile); border-radius: var(--r-tile); overflow: hidden; display: flex; flex-direction: column; }
+  .tile .shot { background: #000; aspect-ratio: 16 / 10; display: block; width: 100%; object-fit: contain; }
+  .tile .body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .tile .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .tile .head b { font-size: 20px; font-weight: 800; }
+  .tile .head .badge { margin-left: auto; }
+  .tile .nums { display: flex; gap: 22px; }
+  .tile .nums b { display: block; font-size: 24px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .tile .nums span { color: var(--muted); font-size: 12.5px; }
+  .tile .msg { margin-top: 0; background: var(--charcoal); }
+  .tile .btns { margin-top: 0; }
+  .empty { color: var(--muted); padding: 40px 0; }
+  body[data-page="overview"] .stats, body[data-page="overview"] .camera { display: none; }
+  #groups section h2 { font-size: 18px; }
+
+  .row { margin-bottom: 14px; } .row:last-child { margin-bottom: 0; }
+  .row .top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
   .row label.name { flex: 1; }
-  .hint { color: var(--muted); font-size: 12px; }
-  input[type=number], select { width: 84px; background: var(--bg); color: var(--text); border: 1px solid var(--line);
-                               border-radius: 4px; padding: 3px 6px; font: inherit; text-align: right; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  input[type=number], select { width: 88px; background: var(--charcoal); color: var(--text);
+                               border: 1px solid var(--line); border-radius: var(--r-ctl);
+                               padding: 5px 8px; font: inherit; text-align: right; }
+  #calsec input[type=number], #calsec select { background: var(--charcoal); }
   select { width: auto; max-width: 100%; text-align: left; }
-  .row input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=range] { width: 100%; }
   input:disabled { opacity: .4; }
-  input[type=checkbox] { accent-color: var(--accent); }
-  .auto { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
-  .savebar { display: flex; align-items: center; gap: 10px; }
+  .auto { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .auto.big { color: var(--text); font-size: 14px; margin: 4px 0; }
+
   button.primary, button.secondary, button.danger {
-    border: 0; border-radius: 6px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
-  button.primary { background: var(--accent); color: #fff; }
-  button.secondary { background: var(--bg); color: var(--text); border: 1px solid var(--line); font-weight: 500; }
-  button.danger { background: transparent; color: var(--bad); border: 1px solid var(--line); font-weight: 500; }
+    border-radius: 999px; padding: 9px 18px; font: inherit; font-weight: 700; cursor: pointer;
+    border: 1px solid transparent; }
+  button.primary { background: var(--magenta); color: #fff; }
+  button.primary:hover:not(:disabled) { background: #b3006d; }
+  button.secondary { background: transparent; color: var(--text); border-color: var(--line); font-weight: 600; }
+  button.secondary:hover:not(:disabled) { border-color: var(--muted); }
+  button.danger { background: transparent; color: var(--bad); border-color: transparent; font-weight: 600; }
   button:disabled { opacity: .45; cursor: default; }
-  .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-  #status { color: var(--muted); } #status.dirty { color: var(--warn); } #status.err { color: var(--bad); }
-  .grid2 { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; }
-  .progress { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; margin: 4px 0 10px; }
-  .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; }
+  .progress { height: 10px; background: var(--charcoal); border-radius: 999px; overflow: hidden; margin: 6px 0 14px; }
+  .progress > div { height: 100%; background: var(--magenta); width: 0; border-radius: 999px; transition: width .3s; }
   .progress.done > div { background: var(--good); }
   .kv { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
   .kv span:first-child { color: var(--muted); }
-  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
-  .chip { padding: 2px 8px; border-radius: 999px; font-size: 12px; background: var(--bg);
-          border: 1px solid var(--line); color: var(--muted); }
-  .chip.ok { color: var(--good); border-color: var(--good); }
-  .bighint { font-size: 15px; font-weight: 600; margin: 6px 0; }
-  .rms { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .note { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 12px; }
+  /* Dashed = still needed (the pitch deck's "future / softer" convention); solid = done. */
+  .chip { padding: 3px 12px; border-radius: 999px; font-size: 13px; border: 1px dashed var(--muted);
+          color: var(--muted); }
+  .chip.ok { color: var(--good); border: 1px solid var(--good); }
+  .bighint { font-size: 18px; font-weight: 700; margin: 0 0 10px; }
+  .rms { font-size: 48px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .note { margin-top: 10px; font-size: 13px; color: var(--muted); }
   .note.ok { color: var(--good); } .note.bad { color: var(--bad); }
-  svg.bars { width: 100%; height: 70px; display: block; margin: 6px 0; }
+  svg.bars { width: 100%; height: 70px; display: block; margin: 8px 0; }
+  #calsec .msg { background: var(--charcoal); margin-top: 0; }
+
+
+  /* ---- icons ---- */
+  .ic { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2;
+        stroke-linecap: round; stroke-linejoin: round; }
+  button .ic { margin: -2px 0; }
+  button.primary, button.secondary, button.danger { display: inline-flex; align-items: center; gap: 8px; }
+  .pages button { display: inline-flex; align-items: center; gap: 8px; }
+  .pages button .ic { width: 20px; height: 20px; }
+  .badge, .msg { display: inline-flex; align-items: center; gap: 8px; }
+  .msg { display: flex; }
+  .badge::before, .msg::before { content: ""; width: 16px; height: 16px; flex: none; display: none;
+                                 background: currentColor; -webkit-mask: var(--mi) center / contain no-repeat;
+                                 mask: var(--mi) center / contain no-repeat; }
+  .badge.good, .badge.bad, .badge.warn { padding-left: 9px; }
+  .badge.good::before { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m8 12.5 2.6 2.6L16.2 9.4'/%3E%3C/svg%3E"); display: block; }
+  .badge.bad::before { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.8 21.2 19.6H2.8z'/%3E%3Cpath d='M12 10v4.2M12 17.2v.1'/%3E%3C/svg%3E"); display: block; }
+  .badge.warn::before { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.5' stroke-dasharray='3.2 3.4'/%3E%3C/svg%3E"); display: block; }
+  .msg.pose::before { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z'/%3E%3Ccircle cx='12' cy='10' r='2.4'/%3E%3C/svg%3E"); display: block; background: var(--good); }
+  .msg.reject::before { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.8 21.2 19.6H2.8z'/%3E%3Cpath d='M12 10v4.2M12 17.2v.1'/%3E%3C/svg%3E"); display: block; background: var(--warn); }
+  .msg.bad::before { --mi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m9 9 6 6M15 9l-6 6'/%3E%3C/svg%3E"); display: block; background: var(--bad); }
+  button[data-armed] { color: #fff; background: var(--bad); border-color: var(--bad); }
+
+  /* ---- custom dropdown (wraps a hidden native <select>, which stays the source of truth) ---- */
+  select.native { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+  .dd { position: relative; display: inline-block; min-width: 0; max-width: 100%; }
+  .dd-btn { display: inline-flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+            background: var(--charcoal); color: var(--text); border: 1px solid var(--line);
+            border-radius: var(--r-ctl); padding: 6px 10px 6px 12px; font: inherit; cursor: pointer; text-align: left; }
+  .dd-btn:hover:not(:disabled) { border-color: var(--muted); }
+  .dd-btn[aria-expanded="true"] { border-color: var(--magenta); }
+  .dd-btn .ic { width: 16px; height: 16px; color: var(--muted); transition: transform .15s; }
+  .dd-btn[aria-expanded="true"] .ic { transform: rotate(180deg); }
+  .dd-btn:disabled { cursor: default; } .dd-btn:disabled .ic { display: none; }
+  .dd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dd-list { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; min-width: 100%; max-height: 300px;
+             overflow: auto; margin: 0; padding: 6px; list-style: none; background: var(--tile);
+             border: 1px solid var(--line); border-radius: var(--r-tile); box-shadow: 0 12px 32px rgba(0, 0, 0, .45); }
+  .dd-list li { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px;
+                cursor: pointer; white-space: nowrap; }
+  .dd-list li.active { background: var(--charcoal); }
+  .dd-list li .ic { width: 16px; height: 16px; color: var(--magenta); visibility: hidden; }
+  .dd-list li[aria-selected="true"] { font-weight: 700; }
+  .dd-list li[aria-selected="true"] .ic { visibility: visible; }
+  .pick .dd-btn { background: transparent; border: 0; font-size: 16px; font-weight: 700; padding: 4px 8px; }
+  .pick .dd-list { left: 0; right: auto; }
+
+  /* ---- custom number stepper (wraps an <input type=number> without its spin arrows) ---- */
+  .num { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: var(--r-ctl);
+         background: var(--charcoal); overflow: hidden; flex: none; }
+  .num:focus-within { border-color: var(--magenta); }
+  .num input[type=number] { width: 64px; border: 0; border-radius: 0; background: transparent; text-align: center;
+                            padding: 5px 2px; -moz-appearance: textfield; appearance: textfield; }
+  .num input[type=number]:focus-visible { outline: none; }
+  .num input::-webkit-outer-spin-button, .num input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .num button { background: transparent; border: 0; color: var(--muted); padding: 0 7px; cursor: pointer;
+                display: inline-flex; align-items: center; }
+  .num button:hover:not(:disabled) { color: var(--text); background: var(--tile); }
+  .num button:disabled { opacity: .35; cursor: default; }
+  .num button .ic { width: 14px; height: 14px; }
+
+  /* ---- switches (checkboxes) and sliders ---- */
+  input[type=checkbox] { -webkit-appearance: none; appearance: none; width: 34px; height: 20px; flex: none;
+                         border-radius: 999px; background: var(--line); position: relative; cursor: pointer;
+                         margin: 0; transition: background .15s; }
+  input[type=checkbox]::before { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px;
+                                 border-radius: 50%; background: #fff; transition: transform .15s; }
+  input[type=checkbox]:checked { background: var(--magenta); }
+  input[type=checkbox]:checked::before { transform: translateX(14px); }
+  input[type=range] { -webkit-appearance: none; appearance: none; height: 22px; background: transparent; cursor: pointer; }
+  input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 999px;
+    background: linear-gradient(90deg, var(--magenta) var(--p, 0%), var(--line) var(--p, 0%)); }
+  input[type=range]::-moz-range-track { height: 6px; border-radius: 999px; background: var(--line); }
+  input[type=range]::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--magenta); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px;
+    border-radius: 50%; background: #fff; border: 3px solid var(--magenta); }
+  input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #fff;
+    border: 3px solid var(--magenta); }
+  input[type=range]:disabled { opacity: .35; cursor: default; }
+
+
+  /* ---- tuning: PhotonVision-style sub-tabs and rows ---- */
+  .subtabs { display: flex; gap: 4px; background: var(--tile); border-radius: var(--r-tile); padding: 4px; margin-bottom: 18px; }
+  .subtabs button { flex: 1; background: transparent; border: 0; border-radius: var(--r-ctl); color: var(--muted);
+                    font: inherit; font-size: 15px; padding: 8px 6px; cursor: pointer; }
+  .subtabs button:hover { color: var(--text); }
+  .subtabs button.on { background: var(--charcoal); color: var(--text); font-weight: 700;
+                       box-shadow: inset 0 -3px 0 var(--magenta); }
+  .subpage[hidden] { display: none; }
+  .srow { display: grid; grid-template-columns: minmax(7.5em, 0.85fr) minmax(0, 1.6fr) 4.4em; align-items: center;
+          gap: 4px 10px; margin-bottom: 12px; }
+  .srow:last-child { margin-bottom: 0; }
+  .srow > .wide { grid-column: 2 / -1; justify-self: stretch; }
+  .srow > .wide .dd { display: block; }
+  .srow > .hint { grid-column: 1 / -1; margin-top: -2px; }
+  .slide { display: flex; align-items: center; gap: 2px; min-width: 0; }
+  .slide input[type=range] { flex: 1; min-width: 0; }
+  .arrow { background: transparent; border: 0; color: var(--muted); padding: 2px; cursor: pointer;
+           display: inline-flex; border-radius: 6px; }
+  .arrow:hover:not(:disabled) { color: var(--text); background: var(--tile); }
+  .arrow:disabled { opacity: .35; cursor: default; }
+  .arrow .ic { width: 18px; height: 18px; }
+  input.val { width: 100%; background: transparent; border: 0; border-bottom: 2px solid var(--line); border-radius: 0;
+              padding: 3px 2px; text-align: right; font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
+  input.val:focus-visible { outline: none; border-bottom-color: var(--magenta); }
+  input.val::-webkit-outer-spin-button, input.val::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+  /* ---- targets dropdown under the stream ---- */
+  .resultbox { margin-top: 12px; position: relative; }
+  .resultbox #result { margin-top: 0; cursor: pointer; padding-right: 116px; }
+  .resultbox #result:hover { background: #4a4a4a; }
+  .resultbox .count { position: absolute; right: 40px; top: 10px; color: var(--muted); font-size: 13px; pointer-events: none; }
+  .resultbox > .chev { position: absolute; right: 12px; top: 11px; width: 18px; height: 18px; color: var(--muted);
+                       pointer-events: none; transition: transform .15s; }
+  .resultbox.open > .chev { transform: rotate(180deg); }
+  .targets { margin-top: 8px; background: var(--tile); border-radius: var(--r-ctl); overflow-x: auto; }
+  .targets table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 14px; }
+  .targets th { color: var(--muted); font-weight: 400; text-align: right; padding: 10px 12px 8px;
+                border-bottom: 2px solid var(--magenta); white-space: nowrap; }
+  .targets td { text-align: right; padding: 8px 12px; border-top: 1px solid var(--line); white-space: nowrap; }
+  .targets th:first-child, .targets td:first-child, .targets th:last-child, .targets td:last-child { text-align: left; }
+  .targets td.used { color: var(--good); } .targets td.off { color: var(--warn); }
+  .targets .none { color: var(--muted); text-align: left; }
+
+  /* ---- coprocessor diagnostics ---- */
+  .sysgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 20px; }
+  .systile { background: var(--tile); border-radius: var(--r-tile); padding: 18px; min-width: 0; }
+  .systile.span { grid-column: 1 / -1; }
+  .systile h2 { font-size: 18px; display: flex; align-items: center; gap: 8px; justify-content: flex-start; }
+  .systile .kv { padding: 4px 0; }
+  .systile .kv span:last-child { text-align: right; overflow-wrap: anywhere; }
+  .meter { height: 10px; background: var(--charcoal); border-radius: 999px; overflow: hidden; margin: 4px 0 10px; }
+  .meter > div { height: 100%; width: 0; background: var(--magenta); border-radius: 999px; transition: width .3s; }
+  .meter.hot > div { background: var(--warn); } .meter.crit > div { background: var(--bad); }
+  .cores { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 10px; margin: 6px 0 12px; }
+  .core span { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .core .meter { margin: 4px 0 0; }
+  .systile table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .systile th { color: var(--muted); font-weight: 400; text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); }
+  .systile td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line); }
+  .ok-text { color: var(--good); } .bad-text { color: var(--bad); } .warn-text { color: var(--warn); }
+  body[data-page="system"] .stats, body[data-page="system"] .camera { display: none; }
+
+  @media (max-width: 1100px) {
+    header { grid-template-columns: auto minmax(0, 1fr); }
+    .stats { grid-column: 1 / -1; justify-content: start; text-align: left; }
+  }
+  @media (max-width: 960px) { .work { grid-template-columns: minmax(0, 1fr); } .view { position: static; } }
+  @media (max-width: 560px) {
+    header { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; }
+    main { padding: 16px; } .bar { padding: 0 16px; } .pages { gap: 18px; }
+    .stats { grid-template-columns: repeat(2, auto); gap: 10px 24px; }
+    .word small { white-space: normal; }
+  }
+  @media (prefers-reduced-motion: reduce) { .progress > div { transition: none; } }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- NEIA icon style: 24-unit line icons, stroke 2, round caps and joins -->
+    <symbol id="i-cameras" viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="19" height="13" rx="2.5"/><path d="M8.5 6.5 10 4h4l1.5 2.5"/><circle cx="12" cy="13" r="3.5"/></symbol>
+    <symbol id="i-tune" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><path d="M8 4v4.5h7V4M8 20v-6h8v6"/></symbol>
+    <symbol id="i-print" viewBox="0 0 24 24"><path d="M7 9V4h10v5"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v6H7z"/></symbol>
+    <symbol id="i-capture" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/><path d="M9.5 3v3.5M14.5 3v3.5M9.5 17.5V21M14.5 17.5V21M3 9.5h3.5M3 14.5h3.5M17.5 9.5H21M17.5 14.5H21"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24"><path d="M14.5 6.5 9 12l5.5 5.5" fill="currentColor"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="M9.5 6.5 15 12l-5.5 5.5" fill="currentColor"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  </defs>
+</svg>
+<div class="strip" aria-hidden="true"></div>
 <header>
-  <span class="dot" id="conn"></span>
-  <select id="camsel" title="Switch camera"><option id="name">camera</option></select>
-  <span class="badge" id="calbadge">–</span>
+  <div class="lockup">
+    <div class="marks">
+      <img alt="neia robotics" src="data:image/png;base64,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">
+      <img alt="choate robotics" src="data:image/png;base64,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">
+    </div>
+    <div class="word">
+      <b>owl</b>
+      <small>strix vision by <span class="n">neia robotics 9644</span> × <span class="c">choate 7407</span></small>
+    </div>
+  </div>
+  <div class="camera">
+    <span class="pick" title="switch camera"><span class="dot" id="conn"></span>
+      <select id="camsel" aria-label="camera"><option id="name">camera</option></select></span>
+    <span class="badge" id="calbadge">–</span>
+  </div>
   <div class="stats">
-    <span title="frames the camera delivers"><b id="camfps">–</b> camera fps</span>
-    <span title="frames run through detection"><b id="fps">–</b> processed</span>
-    <span><b id="tagfps">–</b> tag fps</span>
-    <span>detect <b id="proc">–</b> ms</span>
+    <div class="stat" title="frames the camera delivers per second"><b id="camfps">–</b><span>camera fps</span></div>
+    <div class="stat" title="frames run through tag detection per second"><b id="fps">–</b><span>processed fps</span></div>
+    <div class="stat" title="frames per second that produced an accepted pose"><b id="tagfps">–</b><span>pose fps</span></div>
+    <div class="stat" title="time to detect tags in one frame"><b id="proc">–</b><span>detect ms</span></div>
   </div>
 </header>
-<main>
-  <div class="view">
-    <div class="tabs">
-      <button data-src="/stream.mjpg" class="on">Annotated</button>
-      <button data-src="/raw.mjpg">Raw</button>
-    </div>
-    <img id="stream" src="/stream.mjpg" alt="camera stream">
-    <div class="msg" id="result">waiting for data…</div>
+<nav class="bar">
+  <div class="pages" role="tablist" aria-label="pages">
+    <button role="tab" data-page="overview"><svg class="ic" aria-hidden="true"><use href="#i-cameras"/></svg>cameras</button>
+    <button role="tab" data-page="tuning"><svg class="ic" aria-hidden="true"><use href="#i-tune"/></svg>tuning</button>
+    <button role="tab" data-page="calibration"><svg class="ic" aria-hidden="true"><use href="#i-target"/></svg>calibration</button>
+    <button role="tab" data-page="system"><svg class="ic" aria-hidden="true"><use href="#i-chip"/></svg>coprocessor</button>
   </div>
-  <aside>
-    <section>
-      <div class="savebar">
-        <button class="primary" id="save">Save to config</button>
-        <span id="status">–</span>
-      </div>
-    </section>
+  <div class="savebar">
+    <span id="status">–</span>
+    <button class="primary" id="save"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg><span class="lbl">save settings</span></button>
+  </div>
+</nav>
+<main>
+  <!-- cameras: every camera at once -->
+  <section class="page" id="page-overview" aria-label="all cameras">
+    <div class="camgrid" id="camgrid"></div>
+  </section>
 
+  <!-- coprocessor diagnostics -->
+  <section class="page" id="page-system" aria-label="coprocessor" hidden>
+    <div class="sysgrid">
+      <div class="systile">
+        <h2><svg class="ic" aria-hidden="true"><use href="#i-chip"/></svg><span id="sys-host">coprocessor</span></h2>
+        <div class="kv"><span>model</span><span id="sys-model">–</span></div>
+        <div class="kv"><span>system</span><span id="sys-os">–</span></div>
+        <div class="kv"><span>up for</span><span id="sys-uptime">–</span></div>
+        <div class="kv"><span>owl running for</span><span id="sys-owl">–</span></div>
+        <div class="kv"><span>addresses</span><span id="sys-ips">–</span></div>
+      </div>
+      <div class="systile">
+        <h2>cpu</h2>
+        <div class="cores" id="sys-cores"></div>
+        <div class="kv"><span>load (1, 5, 15 min)</span><span id="sys-load">–</span></div>
+        <div class="kv" id="sys-gpu-row" hidden><span>gpu</span><span id="sys-gpu">–</span></div>
+        <div id="sys-temps"></div>
+      </div>
+      <div class="systile">
+        <h2>memory and storage</h2>
+        <div class="kv"><span>memory</span><span id="sys-mem">–</span></div>
+        <div class="meter" id="sys-mem-bar"><div></div></div>
+        <div class="kv"><span>disk</span><span id="sys-disk">–</span></div>
+        <div class="meter" id="sys-disk-bar"><div></div></div>
+      </div>
+      <div class="systile">
+        <h2>networktables</h2>
+        <div class="kv"><span>mode</span><span id="nt-mode">–</span></div>
+        <div class="kv"><span>robot</span><span id="nt-target">–</span></div>
+        <div class="kv"><span>connected</span><span id="nt-conn">–</span></div>
+        <div class="kv"><span>clock synced</span><span id="nt-sync">–</span></div>
+        <div class="kv"><span>throttle</span><span id="nt-throttle">–</span></div>
+      </div>
+      <div class="systile span">
+        <h2>camera processes</h2>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>camera</th><th>port</th><th>process</th><th>restarts</th><th>detector</th>
+              <th>fps</th><th>detect ms</th><th>calibration</th></tr></thead>
+            <tbody id="sys-cams"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="systile span">
+        <h2>software</h2>
+        <div id="sys-versions"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- tuning + calibration share the chosen camera's stream -->
+  <section class="page work" id="page-work" hidden>
+    <div class="view">
+      <div class="tabs seg" role="tablist" aria-label="stream">
+        <button data-src="/stream.mjpg" class="on">annotated</button>
+        <button data-src="/raw.mjpg">raw</button>
+      </div>
+      <div class="stage"><img id="stream" alt="camera stream"></div>
+      <div class="resultbox" id="resultbox">
+        <div class="msg" id="result" role="button" tabindex="0" aria-expanded="false" aria-controls="targets"
+             title="show the tags in this frame">waiting for the camera…</div>
+        <span class="count" id="tgtcount"></span><svg class="ic chev" aria-hidden="true"><use href="#i-chevron"/></svg>
+        <div class="targets" id="targets" hidden>
+          <table>
+            <thead><tr><th>id</th><th title="+ left of center">yaw°</th><th title="+ above center">pitch°</th>
+              <th>skew°</th><th>area %</th><th>dist m</th><th>margin</th><th>status</th></tr></thead>
+            <tbody id="tgtbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div id="panel-tuning" hidden>
+        <div class="subtabs" role="tablist" aria-label="settings">
+          <button role="tab" data-sub="input">input</button>
+          <button role="tab" data-sub="apriltag">apriltag</button>
+          <button role="tab" data-sub="output">output</button>
+        </div>
+        <div id="groups"></div>
+      </div>
+      <div id="panel-calibration" hidden>
     <!-- Calibration -->
-    <section id="calsec">
-      <h2><span>Calibration</span><small id="calres">this camera</small></h2>
+        <section id="calsec">
+          <h2><span>calibration</span><small id="calres">this camera</small></h2>
 
-      <div id="cal-idle">
-        <div class="msg" id="calcurrent">–</div>
-        <div class="row" style="margin-top:12px">
-          <div class="top"><label class="name">Board preset</label>
-            <select id="preset">
-              <option value="">Custom</option>
-              <option value="6328">6328 Northstar: 12×9, 5×5, 30/23 mm</option>
-              <option value="pv">PhotonVision: 8×8, 4×4, 1.00/0.75 in</option>
-            </select>
+          <div id="cal-idle">
+            <div class="msg" id="calcurrent">–</div>
+            <div class="row" style="margin-top:14px">
+              <div class="top"><label class="name" for="preset">board</label>
+                <select id="preset">
+                  <option value="">custom</option>
+                  <option value="6328">6328 northstar: 12×9, 5×5, 30/23 mm</option>
+                  <option value="pv">photonvision: 8×8, 4×4, 1.00/0.75 in</option>
+                </select>
+              </div>
+            </div>
+            <div class="grid2">
+              <label for="b_sx">squares wide</label><input type="number" id="b_sx" min="3" max="30" step="1">
+              <label for="b_sy">squares tall</label><input type="number" id="b_sy" min="3" max="30" step="1">
+              <label for="b_sq">square size (mm)</label><input type="number" id="b_sq" min="1" max="200" step="0.1">
+              <label for="b_mk">marker size (mm)</label><input type="number" id="b_mk" min="1" max="200" step="0.1">
+              <label for="b_dict">marker family</label>
+              <select id="b_dict">
+                <option>DICT_4X4_50</option><option>DICT_4X4_100</option><option>DICT_4X4_250</option><option>DICT_4X4_1000</option>
+                <option>DICT_5X5_50</option><option>DICT_5X5_100</option><option>DICT_5X5_250</option><option>DICT_5X5_1000</option>
+                <option>DICT_6X6_50</option><option>DICT_6X6_100</option><option>DICT_6X6_250</option><option>DICT_6X6_1000</option>
+                <option>DICT_7X7_50</option><option>DICT_7X7_100</option><option>DICT_7X7_250</option><option>DICT_7X7_1000</option>
+              </select>
+              <label for="b_legacy">old (legacy) pattern</label><input type="checkbox" id="b_legacy">
+              <label for="wide">wide-angle lens (8-coefficient model)</label><input type="checkbox" id="wide">
+            </div>
+            <div class="note" id="boardsize">–</div>
+            <div class="btns">
+              <button class="primary" id="calstart"><svg class="ic" aria-hidden="true"><use href="#i-target"/></svg><span class="lbl">start calibration</span></button>
+              <button class="secondary" id="printboard"><svg class="ic" aria-hidden="true"><use href="#i-print"/></svg><span class="lbl">print board</span></button>
+            </div>
           </div>
-        </div>
-        <div class="grid2">
-          <label>Squares wide</label><input type="number" id="b_sx" min="3" max="30" step="1">
-          <label>Squares tall</label><input type="number" id="b_sy" min="3" max="30" step="1">
-          <label>Square size (mm)</label><input type="number" id="b_sq" min="1" max="200" step="0.1">
-          <label>Marker size (mm)</label><input type="number" id="b_mk" min="1" max="200" step="0.1">
-          <label>Tag family</label>
-          <select id="b_dict">
-            <option>DICT_4X4_50</option><option>DICT_4X4_100</option><option>DICT_4X4_250</option><option>DICT_4X4_1000</option>
-            <option>DICT_5X5_50</option><option>DICT_5X5_100</option><option>DICT_5X5_250</option><option>DICT_5X5_1000</option>
-            <option>DICT_6X6_50</option><option>DICT_6X6_100</option><option>DICT_6X6_250</option><option>DICT_6X6_1000</option>
-            <option>DICT_7X7_50</option><option>DICT_7X7_100</option><option>DICT_7X7_250</option><option>DICT_7X7_1000</option>
-          </select>
-          <label>Old (legacy) pattern</label><input type="checkbox" id="b_legacy">
-          <label>Wide-angle lens (8-coeff model)</label><input type="checkbox" id="wide">
-        </div>
-        <div class="note" id="boardsize">–</div>
-        <div class="btns">
-          <button class="primary" id="calstart">Start calibration</button>
-          <button class="secondary" id="printboard">Print board</button>
-        </div>
-      </div>
 
-      <div id="cal-active" hidden>
-        <div class="bighint" id="calhint">–</div>
-        <div class="kv"><span>Views</span><span id="calviews">–</span></div>
-        <div class="progress" id="viewsbar"><div></div></div>
-        <div class="kv"><span>Frame coverage</span><span id="calcov">–</span></div>
-        <div class="progress" id="covbar"><div></div></div>
-        <div class="kv"><span>Tilted views (need 2 each)</span></div>
-        <div class="chips" id="tilts"></div>
-        <label class="auto" style="font-size:13px;color:var(--text)"><input type="checkbox" id="autocap" checked>
-          Auto-capture when the board is held still in a new pose</label>
-        <div class="btns">
-          <button class="secondary" id="capture">Capture now</button>
-          <button class="secondary" id="undo">Undo</button>
-          <button class="secondary" id="clear">Clear</button>
-        </div>
-        <div class="btns">
-          <button class="primary" id="calibrate">Calibrate</button>
-          <button class="danger" id="calcancel">Cancel</button>
-        </div>
-        <div class="note" id="calmsg"></div>
-      </div>
+          <div id="cal-active" hidden>
+            <div class="bighint" id="calhint">–</div>
+            <div class="kv"><span>views</span><span id="calviews">–</span></div>
+            <div class="progress" id="viewsbar"><div></div></div>
+            <div class="kv"><span>frame coverage</span><span id="calcov">–</span></div>
+            <div class="progress" id="covbar"><div></div></div>
+            <div class="kv"><span>tilted views (2 each)</span></div>
+            <div class="chips" id="tilts"></div>
+            <label class="auto big"><input type="checkbox" id="autocap" checked>
+              capture automatically when the board is held still in a new pose</label>
+            <div class="btns">
+              <button class="secondary" id="capture"><svg class="ic" aria-hidden="true"><use href="#i-capture"/></svg><span class="lbl">capture now</span></button>
+              <button class="secondary" id="undo"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span class="lbl">undo</span></button>
+              <button class="secondary" id="clear"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg><span class="lbl">clear</span></button>
+            </div>
+            <div class="btns">
+              <button class="primary" id="calibrate"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg><span class="lbl">calibrate</span></button>
+              <button class="danger" id="calcancel"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg><span class="lbl">cancel</span></button>
+            </div>
+            <div class="note" id="calmsg"></div>
+          </div>
 
-      <div id="cal-result" hidden>
-        <div class="kv"><span>Reprojection error (RMS)</span><span id="rverdict"></span></div>
-        <div class="rms" id="rrms">–</div>
-        <svg class="bars" id="rbars" viewBox="0 0 300 70" preserveAspectRatio="none"></svg>
-        <div class="hint" style="margin-bottom:8px">Error per view. Red = dropped as an outlier.</div>
-        <div class="kv"><span>Focal length fx / fy</span><span id="rf">–</span></div>
-        <div class="kv"><span>Principal point cx / cy</span><span id="rc">–</span></div>
-        <div class="kv"><span>Field of view</span><span id="rfov">–</span></div>
-        <div class="kv"><span>Model</span><span id="rmodel">–</span></div>
-        <div class="kv"><span>Views used</span><span id="rviews">–</span></div>
-        <label class="auto" style="font-size:13px;color:var(--text);margin-top:10px">
-          <input type="checkbox" id="preview"> Preview undistorted (straight lines should look straight)</label>
-        <div class="btns">
-          <button class="primary" id="calsave">Save calibration</button>
-          <button class="secondary" id="discard">Discard, keep capturing</button>
-          <button class="danger" id="calcancel2">Cancel</button>
-        </div>
-        <div class="note" id="calmsg2"></div>
+          <div id="cal-result" hidden>
+            <div class="kv"><span>reprojection error (rms)</span><span id="rverdict"></span></div>
+            <div class="rms" id="rrms">–</div>
+            <svg class="bars" id="rbars" viewBox="0 0 300 70" preserveAspectRatio="none" role="img" aria-label="error per view"></svg>
+            <div class="hint" style="margin-bottom:10px">error per view. red views were dropped as outliers.</div>
+            <div class="kv"><span>focal length fx / fy</span><span id="rf">–</span></div>
+            <div class="kv"><span>principal point cx / cy</span><span id="rc">–</span></div>
+            <div class="kv"><span>field of view</span><span id="rfov">–</span></div>
+            <div class="kv"><span>model</span><span id="rmodel">–</span></div>
+            <div class="kv"><span>views used</span><span id="rviews">–</span></div>
+            <label class="auto big" style="margin-top:12px">
+              <input type="checkbox" id="preview"> preview undistorted (straight lines should look straight)</label>
+            <div class="btns">
+              <button class="primary" id="calsave"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg><span class="lbl">save calibration</span></button>
+              <button class="secondary" id="discard"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span class="lbl">discard, keep capturing</span></button>
+              <button class="danger" id="calcancel2"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg><span class="lbl">cancel</span></button>
+            </div>
+            <div class="note" id="calmsg2"></div>
+          </div>
+        </section>
       </div>
-    </section>
-
-    <div id="groups"></div>
-  </aside>
+    </div>
+  </section>
 </main>
 <script>
 // Settings shown in the panel. Keys match settings.py (GLOBAL_SETTINGS / CAMERA_SETTINGS).
 // "auto" settings use null for auto; exposure/gain ranges are replaced by the camera's own.
 const SPEC = [
-  { group: "Camera", note: "this camera only", items: [
-    { k: "resolution", label: "Resolution", select: true,
-      hint: "Each resolution needs its own calibration. 16:13 = the OV2311's full sensor." },
-    { k: "exposure", label: "Exposure", min: 1, max: 1000, step: 1, auto: true, log: true, start: 20,
-      hint: "Lower = less motion blur. Tune while waving a tag." },
-    { k: "gain", label: "Gain", min: 0, max: 100, step: 1, auto: true, start: 0,
-      hint: "Raise if the image is too dark at low exposure." },
-    { k: "std_dev_factor", label: "Std dev factor", min: 0.1, max: 5, step: 0.1,
-      hint: "Higher = robot trusts this camera less." },
+  { tab: "input", group: "camera", note: "this camera only", items: [
+    { k: "resolution", label: "resolution", select: true,
+      hint: "each resolution needs its own calibration. 16:13 is the OV2311's full sensor." },
+    { k: "exposure", label: "exposure", min: 1, max: 1000, step: 1, auto: true, log: true, start: 20,
+      hint: "lower means less motion blur. tune it while waving a tag." },
+    { k: "gain", label: "gain", min: 0, max: 100, step: 1, auto: true, start: 0,
+      hint: "raise it if the image is too dark at low exposure." },
   ]},
-  { group: "Detector", note: "all cameras", items: [
-    { k: "quad_decimate", label: "Quad decimate", min: 1, max: 4, step: 0.5,
-      hint: "Higher = faster detection, shorter range." },
-    { k: "min_cluster_pixels", label: "Min cluster pixels", min: 0, max: 500, step: 5 },
+  { tab: "apriltag", group: "detector", note: "all cameras", items: [
+    { k: "quad_decimate", label: "quad decimate", min: 1, max: 4, step: 0.5,
+      hint: "higher means faster detection but shorter range." },
+    { k: "min_cluster_pixels", label: "min cluster pixels", min: 0, max: 500, step: 5,
+      hint: "smallest outline considered. lower finds farther tags." },
   ]},
-  { group: "Filters", note: "all cameras", items: [
-    { k: "min_decision_margin", label: "Min decision margin", min: 0, max: 100, step: 1 },
-    { k: "max_single_tag_ambiguity", label: "Max single-tag ambiguity", min: 0, max: 1, step: 0.01 },
-    { k: "max_tag_distance_m", label: "Max tag distance (m)", min: 0.5, max: 10, step: 0.1 },
+  { tab: "apriltag", group: "filters", note: "all cameras", items: [
+    { k: "min_decision_margin", label: "min decision margin", min: 0, max: 100, step: 1,
+      hint: "raise it if phantom tags appear, lower it if good far tags are dropped." },
+    { k: "max_single_tag_ambiguity", label: "max single-tag ambiguity", min: 0, max: 1, step: 0.01 },
+    { k: "max_tag_distance_m", label: "max tag distance (m)", min: 0.5, max: 10, step: 0.1 },
   ]},
-  { group: "Stream", note: "all cameras", items: [
-    { k: "stream_max_fps", label: "Stream max FPS", min: 1, max: 60, step: 1 },
+  { tab: "output", group: "pose", note: "this camera only", items: [
+    { k: "std_dev_factor", label: "std dev factor", min: 0.1, max: 5, step: 0.1,
+      hint: "higher means the robot trusts this camera less." },
+  ]},
+  { tab: "output", group: "stream", note: "all cameras", items: [
+    { k: "stream_max_fps", label: "stream max fps", min: 1, max: 60, step: 1,
+      hint: "caps video encoding while someone is watching. the robot's data isn't affected." },
   ]},
 ];
+const SUBTABS = ["input", "apriltag", "output"];
 // Used when the camera can't list its modes (no v4l2-ctl, or a test video).
 const FALLBACK_MODES = [[1600, 1300], [1600, 1200], [1280, 800], [1280, 720], [800, 650], [800, 600], [640, 480]];
 const PRESETS = {
@@ -230,6 +595,122 @@ const PRESETS = {
 };
 
 const $ = (id) => document.getElementById(id);
+// ---- custom controls ----
+// Each wraps the native element, which stays in the page (hidden) as the source of truth:
+// the rest of this script keeps reading .value, setting options and listening for "change".
+const icon = (name) => `<svg class="ic" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const isOpen = (el) => el.dataset.open === "1";
+
+function confirmClick(btn, prompt, action) {
+  const lbl = btn.querySelector(".lbl");
+  if (btn.dataset.armed) {
+    clearTimeout(btn._armTimer); delete btn.dataset.armed; lbl.textContent = btn.dataset.label;
+    action();
+    return;
+  }
+  btn.dataset.label = lbl.textContent; btn.dataset.armed = "1"; lbl.textContent = prompt;
+  btn._armTimer = setTimeout(() => { delete btn.dataset.armed; lbl.textContent = btn.dataset.label; }, 3000);
+}
+
+function enhanceSelect(sel) {
+  sel.classList.add("native");
+  sel.tabIndex = -1;
+  const wrap = document.createElement("div"); wrap.className = "dd";
+  const btn = document.createElement("button");
+  btn.type = "button"; btn.className = "dd-btn"; btn.id = sel.id ? sel.id + "-dd" : "";
+  btn.setAttribute("aria-haspopup", "listbox"); btn.setAttribute("aria-expanded", "false");
+  if (sel.getAttribute("aria-label")) btn.setAttribute("aria-label", sel.getAttribute("aria-label"));
+  const label = document.createElement("span"); label.className = "dd-label";
+  btn.append(label); btn.insertAdjacentHTML("beforeend", icon("chevron"));
+  const list = document.createElement("ul"); list.className = "dd-list"; list.setAttribute("role", "listbox"); list.hidden = true;
+  sel.before(wrap); wrap.append(btn, list, sel);
+  if (sel.id) document.querySelectorAll(`label[for="${sel.id}"]`).forEach((l) => { l.htmlFor = btn.id; });
+  let active = -1;
+  const opts = () => [...sel.options];
+  const highlight = () => list.querySelectorAll("li").forEach((li, i) => {
+    li.classList.toggle("active", i === active); if (i === active) li.scrollIntoView({ block: "nearest" });
+  });
+  const render = () => {
+    list.innerHTML = "";
+    opts().forEach((o, i) => {
+      const li = document.createElement("li");
+      li.setAttribute("role", "option"); li.setAttribute("aria-selected", o.value === sel.value);
+      li.innerHTML = icon("check"); li.append(o.textContent);
+      li.onclick = () => choose(i);
+      li.onmousemove = () => { if (active !== i) { active = i; highlight(); } };
+      list.appendChild(li);
+    });
+    highlight();
+  };
+  const sync = () => {
+    const o = sel.selectedOptions[0];
+    label.textContent = o ? o.textContent : "–";
+    btn.disabled = sel.disabled;
+  };
+  const open = () => {
+    if (btn.disabled) return;
+    active = sel.selectedIndex; render(); list.hidden = false;
+    btn.setAttribute("aria-expanded", "true"); sel.dataset.open = "1";
+  };
+  const close = () => { list.hidden = true; btn.setAttribute("aria-expanded", "false"); delete sel.dataset.open; };
+  const choose = (i) => {
+    const o = opts()[i]; if (!o) return;
+    const changed = sel.value !== o.value;
+    sel.value = o.value; sync(); close(); btn.focus();
+    if (changed) sel.dispatchEvent(new Event("change"));
+  };
+  btn.onclick = () => (list.hidden ? open() : close());
+  btn.onkeydown = (e) => {
+    const n = sel.options.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (list.hidden) { open(); return; }
+      active = (active + (e.key === "ArrowDown" ? 1 : -1) + n) % n; highlight();
+    } else if ((e.key === "Enter" || e.key === " ") && !list.hidden) {
+      e.preventDefault(); choose(active);
+    } else if (e.key === "Escape" && !list.hidden) {
+      e.preventDefault(); close();
+    } else if (e.key === "Tab") { close(); }
+  };
+  document.addEventListener("click", (e) => { if (!wrap.contains(e.target)) close(); });
+  new MutationObserver(() => { sync(); if (!list.hidden) render(); })
+    .observe(sel, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["disabled"] });
+  sel._sync = sync; sync();
+}
+
+function enhanceNumber(input) {
+  const wrap = document.createElement("div"); wrap.className = "num";
+  const mk = (name, label) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.tabIndex = -1; b.setAttribute("aria-label", label); b.innerHTML = icon(name);
+    return b;
+  };
+  const dec = mk("minus", "decrease"), inc = mk("plus", "increase");
+  input.before(wrap); wrap.append(dec, input, inc);
+  const step = (dir) => {
+    const st = Number(input.step) || 1;
+    const mn = input.min === "" ? -Infinity : Number(input.min), mx = input.max === "" ? Infinity : Number(input.max);
+    let v = input.value === "" ? (isFinite(mn) ? mn : 0) : Number(input.value) + dir * st;
+    v = Math.min(mx, Math.max(mn, Math.round(v / st) * st));
+    input.value = +v.toFixed(6);
+    input.dispatchEvent(new Event("change"));
+  };
+  dec.onclick = () => step(-1); inc.onclick = () => step(1);
+  const sync = () => { dec.disabled = inc.disabled = input.disabled; };
+  new MutationObserver(sync).observe(input, { attributes: true, attributeFilter: ["disabled"] });
+  sync();
+}
+
+const paintRange = (r) => {
+  const mn = Number(r.min || 0), mx = Number(r.max || 100);
+  r.style.setProperty("--p", `${mx > mn ? ((Number(r.value) - mn) / (mx - mn)) * 100 : 0}%`);
+};
+document.addEventListener("input", (e) => { if (e.target.type === "range") paintRange(e.target); });
+const syncControls = () => {
+  document.querySelectorAll("select.native").forEach((s) => s._sync && s._sync());
+  document.querySelectorAll('input[type="range"]').forEach(paintRange);
+};
+
 // Each camera serves its own API/stream on its own port; this page can drive any of them.
 let BASE = "";                 // "" = the camera that served this page
 let gen = 0;                   // bumps on camera switch so stale poll results are ignored
@@ -264,95 +745,152 @@ function send(k, v) {
 const calib = (op, extra = {}) =>
   fetch(api("/api/calib"), { method: "POST", body: JSON.stringify({ op, ...extra }) }).then(poll).catch(() => {});
 
-function buildRow(it) {
+function srow(label) {
   const row = document.createElement("div");
-  row.className = "row";
-  const top = document.createElement("div");
-  top.className = "top";
+  row.className = "srow";
   const name = document.createElement("label");
-  name.className = "name";
-  name.textContent = it.label;
-  top.appendChild(name);
-  row.appendChild(top);
-
-  if (it.select) {
-    const sel = document.createElement("select");
-    sel.onchange = () => send(it.k, sel.value);
-    top.appendChild(sel);
-    controls[it.k] = { item: it, el: sel, set: (v) => { sel.value = v; }, busy: () => document.activeElement === sel };
-  } else if (it.bool) {
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.onchange = () => send(it.k, cb.checked);
-    top.appendChild(cb);
-    controls[it.k] = { item: it, set: (v) => { cb.checked = !!v; }, busy: () => false };
-  } else {
-    const num = document.createElement("input");
-    num.type = "number"; num.step = it.step;
-    const slider = document.createElement("input");
-    slider.type = "range";
-    let autoCb = null, dragging = false;
-
-    const setLimits = () => {
-      num.min = it.min; num.max = it.max;
-      slider.min = it.log ? 0 : it.min;
-      slider.max = it.log ? LOG_STEPS : it.max;
-      slider.step = it.log ? 1 : it.step;
-    };
-    setLimits();
-    const setEnabled = (on) => { num.disabled = slider.disabled = !on; };
-
-    slider.oninput = () => { dragging = true; const v = fromSlider(it, slider.value); num.value = v; send(it.k, v); };
-    slider.onchange = () => { dragging = false; };
-    num.onchange = () => {
-      if (num.value === "") return;
-      const v = clamp(it, Number(num.value));
-      num.value = v; slider.value = toSlider(it, v); send(it.k, v);
-    };
-    top.appendChild(num);
-
-    if (it.auto) {
-      const lab = document.createElement("label");
-      lab.className = "auto";
-      autoCb = document.createElement("input");
-      autoCb.type = "checkbox";
-      autoCb.onchange = () => {
-        setEnabled(!autoCb.checked);
-        if (!autoCb.checked && num.value === "") {  // first switch to manual: sensible start
-          num.value = clamp(it, it.start ?? it.min); slider.value = toSlider(it, Number(num.value));
-        }
-        send(it.k, autoCb.checked ? null : clamp(it, Number(num.value)));
-      };
-      lab.append(autoCb, "Auto");
-      top.appendChild(lab);
-    }
-    row.appendChild(slider);
-    controls[it.k] = {
-      item: it, setLimits,
-      set: (v) => {
-        const isAuto = v === null || v === undefined || (it.auto && v < 0);
-        if (autoCb) autoCb.checked = isAuto;
-        setEnabled(!isAuto);
-        if (!isAuto) { num.value = Math.round(v * 1000) / 1000; slider.value = toSlider(it, clamp(it, v)); }
-      },
-      busy: () => dragging || document.activeElement === num,
-    };
-  }
-  if (it.hint) {
-    const h = document.createElement("div");
-    h.className = "hint"; h.textContent = it.hint;
-    row.appendChild(h);
-  }
+  name.className = "name"; name.textContent = label;
+  row.appendChild(name);
   return row;
 }
 
+// One setting -> one or two grid rows: label | control | value (auto switch on its own row).
+function buildRow(it) {
+  const frag = document.createDocumentFragment();
+  const addHint = (row) => {
+    if (!it.hint) return;
+    const h = document.createElement("div");
+    h.className = "hint"; h.textContent = it.hint;
+    row.appendChild(h);
+  };
+
+  if (it.select) {
+    const row = srow(it.label);
+    const box = document.createElement("div"); box.className = "wide";
+    const sel = document.createElement("select");
+    sel.onchange = () => send(it.k, sel.value);
+    box.appendChild(sel); row.appendChild(box);
+    enhanceSelect(sel);
+    addHint(row); frag.appendChild(row);
+    controls[it.k] = { item: it, el: sel, set: (v) => { sel.value = v; sel._sync(); }, busy: () => isOpen(sel) };
+    return frag;
+  }
+
+  let autoCb = null;
+  if (it.auto) {
+    const arow = srow(`auto ${it.label}`);
+    autoCb = document.createElement("input"); autoCb.type = "checkbox";
+    arow.appendChild(autoCb);
+    frag.appendChild(arow);
+  }
+  const row = srow(it.label);
+  const slide = document.createElement("div"); slide.className = "slide";
+  const mkArrow = (name, label) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "arrow"; b.setAttribute("aria-label", label); b.innerHTML = icon(name);
+    return b;
+  };
+  const dec = mkArrow("left", `decrease ${it.label}`), inc = mkArrow("right", `increase ${it.label}`);
+  const slider = document.createElement("input"); slider.type = "range";
+  slider.setAttribute("aria-label", it.label);
+  slide.append(dec, slider, inc);
+  const num = document.createElement("input");
+  num.type = "number"; num.className = "val"; num.step = it.step; num.setAttribute("aria-label", it.label);
+  row.append(slide, num);
+  addHint(row); frag.appendChild(row);
+  let dragging = false;
+
+  const setLimits = () => {
+    num.min = it.min; num.max = it.max;
+    slider.min = it.log ? 0 : it.min;
+    slider.max = it.log ? LOG_STEPS : it.max;
+    slider.step = it.log ? 1 : it.step;
+  };
+  setLimits();
+  const setEnabled = (on) => { num.disabled = slider.disabled = dec.disabled = inc.disabled = !on; };
+  const commit = (v) => {
+    v = clamp(it, v);
+    v = it.log ? v : Math.round(v / it.step) * it.step;
+    num.value = +v.toFixed(6); slider.value = toSlider(it, v); paintRange(slider);
+    send(it.k, +v.toFixed(6));
+  };
+  slider.oninput = () => { dragging = true; commit(fromSlider(it, slider.value)); };
+  slider.onchange = () => { dragging = false; };
+  num.onchange = () => { if (num.value !== "") commit(Number(num.value)); };
+  const nudge = (dir) => {
+    if (num.value === "") return;
+    commit(it.log ? fromSlider(it, Number(slider.value) + dir * 25) : Number(num.value) + dir * it.step);
+  };
+  dec.onclick = () => nudge(-1); inc.onclick = () => nudge(1);
+
+  if (autoCb) {
+    autoCb.setAttribute("aria-label", `auto ${it.label}`);
+    autoCb.onchange = () => {
+      setEnabled(!autoCb.checked);
+      if (!autoCb.checked && num.value === "") {  // first switch to manual: sensible start
+        num.value = clamp(it, it.start ?? it.min); slider.value = toSlider(it, Number(num.value));
+      }
+      paintRange(slider);
+      send(it.k, autoCb.checked ? null : clamp(it, Number(num.value)));
+    };
+  }
+  controls[it.k] = {
+    item: it, setLimits,
+    set: (v) => {
+      const isAuto = v === null || v === undefined || (it.auto && v < 0);
+      if (autoCb) autoCb.checked = isAuto;
+      setEnabled(!isAuto);
+      if (!isAuto) { num.value = Math.round(v * 1000) / 1000; slider.value = toSlider(it, clamp(it, v)); }
+      paintRange(slider);
+    },
+    busy: () => dragging || document.activeElement === num,
+  };
+  return frag;
+}
+
+// Settings sub-tabs (input / apriltag / output), like PhotonVision's pipeline tabs.
+const subpages = {};
+for (const name of SUBTABS) {
+  const d = document.createElement("div");
+  d.className = "subpage"; d.dataset.sub = name; d.setAttribute("role", "tabpanel");
+  $("groups").appendChild(d); subpages[name] = d;
+}
 for (const g of SPEC) {
   const sec = document.createElement("section");
   const h = document.createElement("h2");
   h.innerHTML = `<span>${g.group}</span><small>${g.note}</small>`;
   sec.appendChild(h);
   for (const it of g.items) sec.appendChild(buildRow(it));
-  $("groups").appendChild(sec);
+  subpages[g.tab].appendChild(sec);
+}
+let sub = "input";
+function showSub(name) {
+  sub = SUBTABS.includes(name) ? name : "input";
+  document.querySelectorAll(".subtabs button").forEach((b) => {
+    const on = b.dataset.sub === sub; b.classList.toggle("on", on); b.setAttribute("aria-selected", on);
+  });
+  for (const [k, d] of Object.entries(subpages)) d.hidden = k !== sub;
+}
+document.querySelectorAll(".subtabs button").forEach((b) => b.onclick = () => showSub(b.dataset.sub));
+showSub("input");
+
+// ---- targets dropdown under the stream ----
+function toggleTargets(open) {
+  const box = $("resultbox"), want = open ?? !box.classList.contains("open");
+  box.classList.toggle("open", want); $("targets").hidden = !want;
+  $("result").setAttribute("aria-expanded", want);
+}
+$("result").onclick = () => toggleTargets();
+$("result").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleTargets(); } };
+const cell = (v, d) => (v === null || v === undefined ? "–" : Number(v).toFixed(d));
+function showTargets(list) {
+  list = list || [];
+  $("tgtcount").textContent = list.length === 1 ? "1 tag" : `${list.length} tags`;
+  if ($("targets").hidden) return;
+  $("tgtbody").innerHTML = list.length ? list.map((t) => `<tr><td>${t.id}</td><td>${cell(t.yaw, 1)}</td>
+    <td>${cell(t.pitch, 1)}</td><td>${cell(t.skew, 1)}</td><td>${cell(t.area, 2)}</td><td>${cell(t.dist, 2)}</td>
+    <td>${cell(t.margin, 0)}</td><td class="${t.status === "used" ? "used" : "off"}">${t.status}</td></tr>`).join("")
+    : `<tr><td class="none" colspan="8">no tags in this frame</td></tr>`;
 }
 
 function fillModes(modes, current) {
@@ -372,12 +910,14 @@ function fillModes(modes, current) {
     const o = document.createElement("option");
     const ar = aspect(w, h);
     o.value = `${w}x${h}`;
-    o.textContent = `${w}×${h}  ${ar === "16:13" ? "16:13 full sensor" : ar}${fps ? ` · ${Math.round(fps)} fps` : ""}`;
+    o.textContent = `${w}×${h}  ${ar === "16:13" ? "16:13 full sensor" : ar}${fps ? `, ${Math.round(fps)} fps` : ""}`;
     sel.appendChild(o);
   }
 }
 
 // ---- board settings ----
+["camsel", "preset", "b_dict"].forEach((id) => enhanceSelect($(id)));
+["b_sx", "b_sy", "b_sq", "b_mk"].forEach((id) => enhanceNumber($(id)));
 const boardInputs = {
   board_squares_x: [$("b_sx"), (v) => v, (x) => Number(x)],
   board_squares_y: [$("b_sy"), (v) => v, (x) => Number(x)],
@@ -400,10 +940,10 @@ $("preset").onchange = () => {
 };
 function showBoard(vals) {
   for (const [k, [el, toUi]] of Object.entries(boardInputs)) {
-    if (!(k in vals) || document.activeElement === el || Date.now() - (lastSent[k] || 0) < 1500) continue;
+    if (!(k in vals) || document.activeElement === el || isOpen(el) || Date.now() - (lastSent[k] || 0) < 1500) continue;
     if (el.type === "checkbox") el.checked = !!vals[k]; else el.value = toUi(vals[k]);
   }
-  if (document.activeElement !== $("preset")) {
+  if (!isOpen($("preset"))) {
     const match = Object.entries(PRESETS).find(([, p]) =>
       Object.entries(p).every(([k, v]) => typeof v === "number" ? Math.abs(vals[k] - v) < 1e-6 : vals[k] === v));
     $("preset").value = match ? match[0] : "";
@@ -412,9 +952,9 @@ function showBoard(vals) {
   if (sx && sy && sq) {
     const w = sx * sq * 1000, h = sy * sq * 1000;
     const fitsLetter = (w <= 203 && h <= 267) || (w <= 267 && h <= 203);
-    $("boardsize").textContent = `Printed board: ${w.toFixed(0)} × ${h.toFixed(0)} mm` +
-      (fitsLetter ? " (fits letter paper)." : ". Bigger than letter: print on tabloid/11×17 or show it full-screen on a flat monitor.") +
-      " Print at 100% scale and measure a square.";
+    $("boardsize").textContent = `printed board: ${w.toFixed(0)} × ${h.toFixed(0)} mm` +
+      (fitsLetter ? " (fits letter paper)." : ". bigger than letter: print on tabloid/11×17 or show it full-screen on a flat monitor.") +
+      " print at 100% scale and measure a square.";
   }
 }
 $("printboard").onclick = () => window.open(api("/api/board.png?t=" + Date.now()), "_blank");
@@ -423,9 +963,10 @@ $("printboard").onclick = () => window.open(api("/api/board.png?t=" + Date.now()
 $("calstart").onclick = () => { selectTab("/stream.mjpg"); calib("start", { wide_lens: $("wide").checked }); };
 $("capture").onclick = () => calib("capture");
 $("undo").onclick = () => calib("undo");
-$("clear").onclick = () => { if (confirm("Clear all captured views?")) calib("clear"); };
+$("clear").onclick = () => confirmClick($("clear"), "click again to clear all views", () => calib("clear"));
 $("calibrate").onclick = () => calib("calibrate");
-$("calcancel").onclick = $("calcancel2").onclick = () => { if (confirm("Cancel calibration? Captured views are lost.")) calib("stop"); };
+$("calcancel").onclick = () => confirmClick($("calcancel"), "click again: views are lost", () => calib("stop"));
+$("calcancel2").onclick = () => confirmClick($("calcancel2"), "click again: result is lost", () => calib("stop"));
 $("autocap").onchange = () => calib("auto", { on: $("autocap").checked });
 $("discard").onclick = () => calib("discard");
 $("preview").onchange = () => calib("preview", { on: $("preview").checked });
@@ -434,7 +975,191 @@ $("calsave").onclick = () => calib("save");
 let tabSrc = "/stream.mjpg";
 function selectTab(src, force = false) {
   document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x.dataset.src === src));
-  if (force || src !== tabSrc) { tabSrc = src; $("stream").src = api(src); }
+  if (force || src !== tabSrc) {
+    tabSrc = src;
+    if (page === "tuning" || page === "calibration") $("stream").src = api(src);
+  }
+}
+
+// ---- pages: cameras (all of them), tuning, calibration ----
+const PAGES = ["overview", "tuning", "calibration", "system"];
+let page = "overview";
+const hashParams = () => new URLSearchParams(location.hash.slice(1));
+function writeHash() {
+  const cam = cameras.find((c) => String(c.port) === String($("camsel").value));
+  const q = new URLSearchParams({ page });
+  const name = cam ? cam.name : hashParams().get("cam");  // camera list not loaded yet: keep the URL's
+  if (name) q.set("cam", name);
+  history.replaceState(null, "", "#" + q.toString());
+}
+function showPage(p) {
+  page = PAGES.includes(p) ? p : "overview";
+  document.body.dataset.page = page;
+  document.querySelectorAll(".pages button").forEach((b) => {
+    const on = b.dataset.page === page;
+    b.classList.toggle("on", on); b.setAttribute("aria-selected", on);
+    if (on) b.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
+  $("page-overview").hidden = page !== "overview";
+  $("page-system").hidden = page !== "system";
+  $("page-work").hidden = page === "overview" || page === "system";
+  $("panel-tuning").hidden = page !== "tuning";
+  $("panel-calibration").hidden = page !== "calibration";
+  if (page === "system") startSystem(); else stopSystem();
+  if (page === "overview" || page === "system") {
+    $("stream").removeAttribute("src");  // stop the camera encoding a stream nobody sees
+    if (page === "overview") startTiles(); else stopTiles();
+  } else {
+    stopTiles();
+    selectTab(tabSrc, true);
+  }
+  writeHash();
+}
+document.querySelectorAll(".pages button").forEach((b) => b.onclick = () => showPage(b.dataset.page));
+// Follow links and edits to #page=…&cam=… without a reload.
+window.addEventListener("hashchange", () => {
+  const h = hashParams();
+  const cam = cameras.find((c) => c.name === h.get("cam"));
+  if (cam && String(cam.port) !== String($("camsel").value)) switchCamera(cam.port);
+  showPage(h.get("page") || page);
+});
+
+// ---- coprocessor page ----
+let sysTimer = null;
+const gb = (b) => (b / 1e9).toFixed(b >= 1e10 ? 0 : 1) + " GB";
+const dur = (sec) => {
+  if (sec === null || sec === undefined) return "–";
+  const d = Math.floor(sec / 86400), h = Math.floor(sec / 3600) % 24, m = Math.floor(sec / 60) % 60;
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${Math.floor(sec % 60)}s`;
+};
+const meter = (id, frac, hot = 0.8, crit = 0.95) => {
+  const el = $(id); el.firstElementChild.style.width = `${Math.min(100, frac * 100)}%`;
+  el.classList.toggle("hot", frac >= hot && frac < crit); el.classList.toggle("crit", frac >= crit);
+};
+const yes = (ok, a = "yes", b = "no") => `<span class="${ok ? "ok-text" : "bad-text"}">${ok ? a : b}</span>`;
+function startSystem() { pollSystem(); clearInterval(sysTimer); sysTimer = setInterval(pollSystem, 1000); }
+function stopSystem() { clearInterval(sysTimer); sysTimer = null; }
+async function pollSystem() {
+  let s;
+  try { s = await (await fetch(api("/api/system"), { cache: "no-store" })).json(); }
+  catch (e) { $("sys-host").textContent = "can't reach the coprocessor"; return; }
+  const owl = s.owl || {}, nt = owl.nt || {};
+  $("sys-host").textContent = s.host || "coprocessor";
+  $("sys-model").textContent = s.model || "–";
+  $("sys-os").textContent = `${s.os} (${s.arch})`;
+  $("sys-uptime").textContent = dur(s.uptime_s);
+  $("sys-owl").textContent = owl.started ? dur(s.time - owl.started) : "–";
+  $("sys-ips").textContent = (owl.ips || []).join(", ") || "–";
+  const cores = s.cpu || [];
+  $("sys-cores").innerHTML = cores.length ? cores.map((p, i) => `<div class="core"><span>core ${i}: ${Math.round(p)}%</span>
+      <div class="meter ${p >= 95 ? "crit" : p >= 80 ? "hot" : ""}"><div style="width:${p}%"></div></div></div>`).join("")
+    : `<span class="hint">per-core usage isn't available on this system</span>`;
+  $("sys-load").textContent = s.load ? s.load.map((x) => x.toFixed(2)).join(", ") + ` on ${s.cpu_count} cores` : "–";
+  $("sys-gpu-row").hidden = s.gpu === null || s.gpu === undefined;
+  if (s.gpu !== null && s.gpu !== undefined) $("sys-gpu").textContent = `${Math.round(s.gpu)}%`;
+  $("sys-temps").innerHTML = (s.temps || []).map((t) => `<div class="kv"><span>${t.name}</span>
+      <span class="${t.c >= 85 ? "bad-text" : t.c >= 70 ? "warn-text" : ""}">${t.c.toFixed(1)} °C</span></div>`).join("");
+  if (s.memory) { $("sys-mem").textContent = `${gb(s.memory.used)} of ${gb(s.memory.total)}`; meter("sys-mem-bar", s.memory.used / s.memory.total); }
+  else $("sys-mem").textContent = "–";
+  $("sys-disk").textContent = `${gb(s.disk.used)} of ${gb(s.disk.total)}`;
+  meter("sys-disk-bar", s.disk.used / s.disk.total, 0.85, 0.95);
+  $("nt-mode").textContent = nt.mode || "–";
+  $("nt-target").textContent = nt.target || (nt.mode ? "this coprocessor is the server" : "–");
+  $("nt-conn").innerHTML = nt.mode ? yes(nt.connected) + ((nt.peers || []).length
+    ? ` <span class="hint">(${nt.peers.map((p) => p.id || p.ip).join(", ")})</span>` : "") : "–";
+  $("nt-sync").innerHTML = nt.mode ? yes(nt.time_synced) : "–";
+  $("nt-throttle").textContent = owl.throttle_fps > 0 ? `${owl.throttle_fps} fps (robot disabled)` : "off";
+  const procs = owl.cameras || [];
+  const states = await Promise.all(procs.map((c) => fetch(originFor(c.port) + "/api/state", { cache: "no-store" })
+    .then((r) => r.json()).catch(() => null)));
+  $("sys-cams").innerHTML = procs.map((c, i) => {
+    const st = states[i] || {}, t = st.stats || {};
+    return `<tr><td><b>${c.name}</b></td><td>${c.port}</td><td>${yes(c.alive, `running (pid ${c.pid})`, "stopped")}</td>
+      <td class="${c.restarts ? "warn-text" : ""}">${c.restarts}</td><td>${st.detector || "–"}</td>
+      <td>${fmt(t.fps, 0)}</td><td>${fmt(t.processMs, 1)}</td>
+      <td>${st.calib_info ? yes(true, "calibrated") : yes(false, "", "not calibrated")}</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="hint">waiting for the main process…</td></tr>`;
+  const v = s.versions || {};
+  $("sys-versions").innerHTML = Object.entries(v).filter(([, x]) => x)
+    .map(([k, x]) => `<div class="kv"><span>${k}</span><span>${x}</span></div>`).join("");
+}
+
+// ---- cameras page: one tile per camera, each polling its own port ----
+const tiles = {};  // port -> elements
+let tileTimer = null;
+const originFor = (port) => {
+  const own = location.port || (location.protocol === "https:" ? "443" : "80");
+  return String(port) === own ? "" : `${location.protocol}//${location.hostname}:${port}`;
+};
+function buildTiles(list) {
+  const grid = $("camgrid");
+  grid.innerHTML = "";
+  for (const k in tiles) delete tiles[k];
+  for (const c of list) {
+    const el = document.createElement("article");
+    el.className = "tile";
+    el.innerHTML = `
+      <img class="shot" alt="${c.name} stream">
+      <div class="body">
+        <div class="head"><span class="dot"></span><b></b><span class="badge">–</span></div>
+        <div class="nums">
+          <div><b data-k="fps">–</b><span>processed fps</span></div>
+          <div><b data-k="tag">–</b><span>pose fps</span></div>
+          <div><b data-k="ms">–</b><span>detect ms</span></div>
+        </div>
+        <div class="msg">waiting for the camera…</div>
+        <div class="btns">
+          <button class="primary" data-go="tuning"><svg class="ic" aria-hidden="true"><use href="#i-tune"/></svg>tune</button>
+          <button class="secondary" data-go="calibration"><svg class="ic" aria-hidden="true"><use href="#i-target"/></svg>calibrate</button>
+        </div>
+      </div>`;
+    el.querySelector(".head b").textContent = c.name;
+    el.querySelectorAll("[data-go]").forEach((b) => b.onclick = () => {
+      if (String($("camsel").value) !== String(c.port)) switchCamera(c.port);
+      showPage(b.dataset.go);
+    });
+    grid.appendChild(el);
+    tiles[c.port] = { el, img: el.querySelector(".shot"), port: c.port };
+  }
+  if (page === "overview") startTiles();
+}
+function startTiles() {
+  if (!Object.keys(tiles).length) return;
+  for (const t of Object.values(tiles)) {
+    if (!t.img.getAttribute("src")) t.img.src = originFor(t.port) + "/stream.mjpg";
+  }
+  pollTiles();
+  clearInterval(tileTimer);
+  tileTimer = setInterval(pollTiles, 1000);
+}
+function stopTiles() {
+  clearInterval(tileTimer); tileTimer = null;
+  for (const t of Object.values(tiles)) t.img.removeAttribute("src");
+}
+function pollTiles() {
+  for (const t of Object.values(tiles)) {
+    fetch(originFor(t.port) + "/api/state", { cache: "no-store" }).then((r) => r.json()).then((s) => {
+      const st = s.stats || {}, q = (sel) => t.el.querySelector(sel);
+      q(".dot").className = "dot " + (st.connected ? "ok" : "bad");
+      q('[data-k="fps"]').textContent = fmt(st.fps, 0);
+      q('[data-k="tag"]').textContent = fmt(st.tagFps, 0);
+      q('[data-k="ms"]').textContent = fmt(st.processMs, 1);
+      const res = st.resolution || (s.values || {}).resolution || "";
+      const badge = q(".badge");
+      if (s.calibration) { badge.className = "badge warn"; badge.textContent = "calibrating"; }
+      else if (s.calib_info) { badge.className = "badge good"; badge.textContent = `calibrated ${res}`; }
+      else { badge.className = "badge bad"; badge.textContent = `not calibrated at ${res}`; }
+      const m = q(".msg");
+      if (s.calibration) { m.className = "msg"; m.textContent = "calibrating: pose output paused"; }
+      else if (st.pose) { m.className = "msg pose"; m.textContent = "pose " + st.pose; }
+      else if (st.lastReject) { m.className = "msg reject"; m.textContent = "last reject: " + st.lastReject; }
+      else { m.className = "msg"; m.textContent = st.connected === false ? "camera not connected" : "no tags in view"; }
+    }).catch(() => {
+      const d = t.el.querySelector(".dot"); d.className = "dot bad";
+      t.el.querySelector(".msg").className = "msg bad";
+      t.el.querySelector(".msg").textContent = "can't reach this camera's process";
+    });
+  }
 }
 document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => selectTab(b.dataset.src));
 
@@ -453,24 +1178,24 @@ function setProgress(id, frac) {
 function showCalibration(s) {
   const c = s.calibration, info = s.calib_info, st = s.stats || {};
   const res = st.resolution || (s.values || {}).resolution || "";
-  $("calres").textContent = res ? `this camera · ${res}` : "this camera";
+  $("calres").textContent = res ? `this camera, ${res}` : "this camera";
   $("cal-idle").hidden = !!c;
   $("cal-active").hidden = !c || c.state === "result";
   $("cal-result").hidden = !c || c.state !== "result";
 
   // Header badge + current calibration.
   const badge = $("calbadge");
-  if (c) { badge.className = "badge warn"; badge.textContent = "CALIBRATING"; }
-  else if (info) { badge.className = "badge good"; badge.textContent = `Calibrated ${res}${info.rms != null ? ` · ${info.rms.toFixed(2)} px` : ""}`; }
-  else if (st.calibrated === false) { badge.className = "badge bad"; badge.textContent = `NOT CALIBRATED ${res}`; }
+  if (c) { badge.className = "badge warn"; badge.textContent = "calibrating"; }
+  else if (info) { badge.className = "badge good"; badge.textContent = `calibrated ${res}${info.rms != null ? `, ${info.rms.toFixed(2)} px` : ""}`; }
+  else if (st.calibrated === false) { badge.className = "badge bad"; badge.textContent = `not calibrated at ${res}`; }
   const cur = $("calcurrent");
   if (info) {
     cur.className = "msg pose";
-    cur.textContent = `Using ${info.file}` + (info.rms != null ? ` · RMS ${info.rms.toFixed(3)} px` : "") +
-      (info.calibrated_at ? ` · ${info.calibrated_at.replace("T", " ")}` : "");
+    cur.textContent = `using ${info.file}` + (info.rms != null ? `, rms ${info.rms.toFixed(3)} px` : "") +
+      (info.calibrated_at ? `, saved ${info.calibrated_at.replace("T", " ")}` : "");
   } else {
     cur.className = "msg bad";
-    cur.textContent = `No calibration for ${res || "this resolution"}. Tags are detected but no poses are sent until you calibrate.`;
+    cur.textContent = `no calibration for ${res || "this resolution"}: tags are detected, but no poses are sent until you calibrate`;
   }
   if (s.calib_msg && !c) { cur.textContent += `  (${s.calib_msg})`; }
   if (!c) return;
@@ -486,7 +1211,7 @@ function showCalibration(s) {
     if (document.activeElement !== $("autocap")) $("autocap").checked = c.auto;
     const busy = c.state === "calibrating";
     $("calibrate").disabled = busy || !c.ready;
-    $("calibrate").textContent = busy ? "Calibrating…" : "Calibrate";
+    $("calibrate").querySelector(".lbl").textContent = busy ? "calibrating…" : "calibrate";
     ["capture", "undo", "clear"].forEach((id) => { $(id).disabled = busy; });
     $("calmsg").textContent = c.message || "";
     $("calmsg").className = "note" + (/fail/.test(c.message) ? " bad" : "");
@@ -505,7 +1230,7 @@ function showCalibration(s) {
   const pv = r.per_view, max = Math.max(...pv, 1), bw = 300 / pv.length;
   $("rbars").innerHTML = pv.map((e, i) => {
     const h = Math.max(1, (e / max) * 66);
-    const col = r.removed.includes(i) ? "#ff5c5c" : e < 0.6 ? "#3ecf6e" : "#f0a33a";
+    const col = r.removed.includes(i) ? "#ff5c5c" : e < 0.6 ? "#3ecf6e" : "#f2853a";
     return `<rect x="${i * bw + bw * 0.15}" y="${70 - h}" width="${bw * 0.7}" height="${h}" fill="${col}"><title>view ${i + 1}: ${e.toFixed(3)} px</title></rect>`;
   }).join("");
   if (document.activeElement !== $("preview")) $("preview").checked = c.preview;
@@ -528,8 +1253,9 @@ function fillCameras(list, current) {
   }
   sel.value = current;
   sel.disabled = list.length < 2;
-  // Open the camera named in the URL (#cam=right_cam), e.g. after a reload.
-  const want = new URLSearchParams(location.hash.slice(1)).get("cam");
+  buildTiles(list);
+  // Open the camera named in the URL (#page=tuning&cam=right_cam), e.g. after a reload.
+  const want = hashParams().get("cam");
   const target = list.find((c) => c.name === want);
   if (target && String(target.port) !== String(current)) switchCamera(target.port);
 }
@@ -545,9 +1271,8 @@ function switchCamera(port) {
     c.item.min = mn; c.item.max = mx;
     if (c.setLimits) c.setLimits();
   }
-  const cam = cameras.find((c) => String(c.port) === String(port));
-  if (cam) history.replaceState(null, "", `#cam=${encodeURIComponent(cam.name)}`);
   $("camsel").value = port;
+  writeHash();
   $("result").className = "msg"; $("result").textContent = "switching camera…";
   selectTab(tabSrc, true);
   poll();
@@ -562,7 +1287,7 @@ async function poll() {
     fillCameras(s.cameras, BASE ? $("camsel").value : location.port);
     if (myGen !== gen) return;  // fillCameras switched to the camera in the URL
     if (!s.cameras || !s.cameras.length) $("name").textContent = s.name || "camera";
-    document.title = `${s.name || "Camera"} · Vision`;
+    document.title = `${s.name || "camera"} | owl`;
 
     if (!rangesApplied && s.ranges) {  // use the camera's real exposure/gain limits
       for (const k of ["exposure", "gain"]) {
@@ -592,14 +1317,21 @@ async function poll() {
     $("tagfps").textContent = fmt(t.tagFps, 0);
     $("proc").textContent = fmt(t.processMs, 1);
     const r = $("result");
-    if (s.calibration) { r.className = "msg"; r.textContent = "Calibrating: pose output paused for this camera."; }
-    else if (t.pose) { r.className = "msg pose"; r.textContent = "Pose: " + t.pose; }
-    else if (t.lastReject) { r.className = "msg reject"; r.textContent = "Last reject: " + t.lastReject; }
-    else { r.className = "msg"; r.textContent = t.connected === false ? "camera not connected" : "no tags seen"; }
+    if (s.calibration) { r.className = "msg"; r.textContent = "calibrating: pose output paused for this camera"; }
+    else if (t.pose) { r.className = "msg pose"; r.textContent = "pose " + t.pose; }
+    else if (t.lastReject) { r.className = "msg reject"; r.textContent = "last reject: " + t.lastReject; }
+    else { r.className = "msg"; r.textContent = t.connected === false ? "camera not connected: check the cable, then the device path in config.json" : "no tags in view"; }
     showCalibration(s);
+    showTargets(t.targets);
+    syncControls();
   } catch (e) {
     if (myGen === gen) $("conn").className = "dot bad";
   }
+}
+// Start on the page in the URL; old links (#cam=… only) open tuning.
+{
+  const h = hashParams();
+  showPage(h.get("page") || (h.get("cam") ? "tuning" : "overview"));
 }
 poll();
 setInterval(poll, 500);
