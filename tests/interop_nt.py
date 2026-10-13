@@ -43,10 +43,10 @@ def version() -> str:
 
 def robot(timeout_s: float = 15.0) -> int:
     inst = call(ntcore.NetworkTableInstance, "create")
-    if hasattr(inst, "startServer"):  # 2026: (persist file, listen address, NT3 port, NT4 port)
-        inst.startServer("", "", 0, PORT)
-    else:  # 2027 dropped NT3: (persist file, listen address, mDNS service, port)
-        inst.start_server("", "", "", PORT)
+    try:  # 2026: (persist file, listen address, NT3 port, NT4 port)
+        call(inst, "startServer", "", "", 0, PORT)
+    except TypeError:  # 2027 dropped NT3: (persist file, listen address, mDNS service, port)
+        call(inst, "startServer", "", "", "", PORT)
     source = TuskSource(topic=TOPIC, inst=inst, throttle_after_s=None)
     print(f"robot: NT server on {PORT}, pyntcore {version()}", flush=True)
     deadline = time.monotonic() + timeout_s

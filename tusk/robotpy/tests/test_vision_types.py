@@ -88,12 +88,35 @@ def test_schema_and_size():
 
 
 def test_matches_fixture():
+    """Decodes the fixture bytes (shared with the Java test) and checks every field.
+
+    Compares values, not freshly encoded bytes: the last bit of a quaternion computed
+    from roll/pitch/yaw can differ between platforms (seen between macOS and Linux)."""
     want = json.loads(FIXTURE.read_text())
-    got = fixture_dict()
-    assert got["typeName"] == want["typeName"]
-    assert got["schema"] == want["schema"]
-    assert got["size"] == want["size"]
-    assert got["hex"] == want["hex"], "encoding changed: regenerate the fixture and update Java"
+    assert call(wpistruct, "getTypeName", VisionObservation) == want["typeName"]
+    assert call(wpistruct, "getSchema", VisionObservation) == want["schema"]
+    assert call(wpistruct, "getSize", VisionObservation) == want["size"]
+
+    raw = bytes.fromhex(want["hex"])
+    assert len(raw) == want["size"]
+    got = wpistruct.unpack(VisionObservation, raw)
+    fields = want["fields"]
+    for name in ("cameraId", "tagCount", "tagMask"):
+        assert getattr(got, name) == fields[name], name
+    for name in ("ageSeconds", "stdDevFactor", "avgTagDistance", "ambiguity"):
+        assert math.isclose(getattr(got, name), fields[name], abs_tol=1e-12), name
+    for name in ("robotPose", "altRobotPose"):
+        pose = getattr(got, name)
+        q = call(pose.rotation(), "getQuaternion")
+        actual = {
+            "x": call(pose, "X"), "y": call(pose, "Y"), "z": call(pose, "Z"),
+            "qw": call(q, "W"), "qx": call(q, "X"), "qy": call(q, "Y"), "qz": call(q, "Z"),
+        }
+        for k, v in fields[name].items():
+            assert math.isclose(actual[k], v, abs_tol=1e-9), f"{name}.{k}"
+
+    # The sample still encodes to the same values (encoding didn't change).
+    assert wpistruct.unpack(VisionObservation, wpistruct.pack(sample())).tagMask == fields["tagMask"]
 
 
 def test_round_trip():

@@ -116,7 +116,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - run: apt-get update && apt-get install -y cmake curl libgoogle-glog-dev libgflags-dev python3
+      # apt's CMake 3.22 can't ask nvcc for C++20; 3.26+ can (same on JetPack 6).
+      - run: apt-get update && apt-get install -y curl libgoogle-glog-dev libgflags-dev python3 python3-pip && pip3 install cmake
       - name: Compile (no GPU needed)
         working-directory: native/gpu_detector
         run: |

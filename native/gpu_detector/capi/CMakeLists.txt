@@ -55,6 +55,21 @@ else()
   enable_language(C)
 endif()
 
+# The detector sources need C++20. CMake learned nvcc's -std=c++20 flag in 3.26
+# (and only for nvcc 12+); older CMake fails later with "requires the language
+# dialect CUDA20". Ubuntu 22.04 / JetPack 6 apt ships 3.22: `pip install cmake`.
+if(ATGPU_BACKEND STREQUAL "cuda" AND CMAKE_CUDA_COMPILER_ID STREQUAL "NVIDIA")
+  if(CMAKE_VERSION VERSION_LESS 3.26)
+    message(FATAL_ERROR "Building with nvcc needs CMake 3.26 or newer for C++20 "
+                        "(this is ${CMAKE_VERSION}). Install one with `pip install cmake`, "
+                        "or use clang-17 as the CUDA compiler.")
+  endif()
+  if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS 12.0)
+    message(FATAL_ERROR "nvcc ${CMAKE_CUDA_COMPILER_VERSION} has no C++20 support; use "
+                        "CUDA 12+ (JetPack 6) or clang-17 as the CUDA compiler (JetPack 5).")
+  endif()
+endif()
+
 find_package(Threads REQUIRED)
 find_package(glog REQUIRED)
 

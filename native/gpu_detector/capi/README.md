@@ -161,10 +161,14 @@ open.  Neither path has been exercised yet.
 JetPack 6.x (Ubuntu 22.04, CUDA 12.x with nvcc that supports C++20):
 
 ```bash
-sudo apt-get install -y cmake build-essential libgoogle-glog-dev libgflags-dev \
-                        python3-numpy            # numpy only for the ctypes test
+sudo apt-get install -y build-essential libgoogle-glog-dev libgflags-dev \
+                        python3-pip python3-numpy   # numpy only for the ctypes test
+pip3 install --user cmake    # 3.26+ is needed for nvcc C++20; apt's 3.22 fails
 # nvcc: /usr/local/cuda/bin/nvcc (installed by the JetPack image / nvidia-jetpack)
 ```
+
+Ubuntu 22.04's apt CMake (3.22) can't ask nvcc for C++20 and stops with "requires
+the language dialect CUDA20". The CMake file checks for this and says so up front.
 
 JetPack 5.x (Ubuntu 20.04, CUDA 11.4/11.8): nvcc 11.x has no C++20 support and
 the sources need it (`std::span`), so use clang-17 as the CUDA compiler: run
