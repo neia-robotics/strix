@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Validates the CUDA AprilTag detector on a machine with an NVIDIA GPU: a cloud VM
-# (e.g. EC2 g5g.xlarge, ARM + T4G, Ubuntu 22.04 to match JetPack 6) or a Jetson.
+# (e.g. EC2 g5g.xlarge, ARM + T4G, Ubuntu 22.04 to match JetPack 6), Google Colab
+# (tools/validate_gpu_colab.ipynb), or a Jetson.
 # Builds native/gpu_detector for this GPU, runs every check, writes a summary.
 #
 #   git clone https://github.com/neia-robotics/strix && cd strix
@@ -18,7 +19,7 @@ SKIP_APT=0
 for arg in "$@"; do
   case "$arg" in
     --skip-apt) SKIP_APT=1 ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -34,6 +35,7 @@ step() {  # step <name> <command...>: run it, record PASS/FAIL, keep going
   if "$@"; then RESULTS+=("PASS  $name"); else RESULTS+=("FAIL  $name"); fi
 }
 die() { echo "ERROR: $*" >&2; exit 1; }
+SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo   # Colab runs as root
 
 echo "== system =="
 uname -m
@@ -46,13 +48,13 @@ fi
 
 # ---- toolchain -------------------------------------------------------------
 if [ "$SKIP_APT" = 0 ] && command -v apt-get >/dev/null; then
-  echo; echo "== apt packages (sudo) =="
-  sudo apt-get update -qq
-  sudo apt-get install -y -qq build-essential curl libgoogle-glog-dev libgflags-dev >/dev/null
+  echo; echo "== apt packages =="
+  $SUDO apt-get update -qq
+  $SUDO apt-get install -y -qq build-essential curl libgoogle-glog-dev libgflags-dev >/dev/null
   # RobotPy 2026 wheels need Python 3.11+; Ubuntu 22.04's default is 3.10.
   if ! command -v python3.11 >/dev/null && ! command -v python3.12 >/dev/null \
      && ! command -v python3.13 >/dev/null && ! command -v python3.14 >/dev/null; then
-    sudo apt-get install -y -qq python3.11 python3.11-venv >/dev/null || true
+    $SUDO apt-get install -y -qq python3.11 python3.11-venv >/dev/null || true
   fi
 fi
 
@@ -77,7 +79,14 @@ ARCHS="$ARCH"; [ "$ARCH" = 87 ] || ARCHS="$ARCH;87"
 echo "CUDA architectures: $ARCHS (running on $ARCH)"
 
 echo; echo "== Python venv ($PY) =="
-"$PY" -m venv "$OUT/venv" || die "venv failed (Ubuntu: sudo apt install ${PY##*/}-venv)"
+if ! "$PY" -m venv "$OUT/venv"; then
+  # Some images (Colab) ship Python without ensurepip; the apt package adds it.
+  rm -rf "$OUT/venv"
+  if [ "$SKIP_APT" = 0 ] && command -v apt-get >/dev/null; then
+    $SUDO apt-get install -y -qq "${PY##*/}-venv" >/dev/null || true
+  fi
+  "$PY" -m venv "$OUT/venv" || die "venv failed (Ubuntu: sudo apt install ${PY##*/}-venv)"
+fi
 VPY="$OUT/venv/bin/python"
 "$VPY" -m pip install -q --upgrade pip
 # cmake from pip: apt's 3.22 can't request C++20 from nvcc (needs 3.26+).
