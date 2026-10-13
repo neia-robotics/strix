@@ -19,6 +19,7 @@
   },
   "filters": {
     "max_hamming": 0,
+    "max_reprojection_error_px": 3.0,
     "min_decision_margin": 25.0,
     "max_single_tag_ambiguity": 0.4,
     "max_tag_distance_m": 6.0,

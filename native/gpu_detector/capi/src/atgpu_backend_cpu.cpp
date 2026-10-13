@@ -56,7 +56,7 @@ class CpuBackend : public Backend {
  private:
   void Run(const uint8_t *gray) {
     ClearDetections();
-    // Test hook for the fatal trap: makes this backend behave like a CHECK
+    // Test hook for process isolation: makes this backend behave like a CHECK
     // failure deep inside the detector.
     if (const char *force = std::getenv("ATGPU_CPU_BACKEND_FORCE_FATAL");
         force != nullptr && force[0] == '1') {

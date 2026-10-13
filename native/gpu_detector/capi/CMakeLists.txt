@@ -160,23 +160,6 @@ endif()
 target_link_libraries(atgpu_apriltag_objs PUBLIC Threads::Threads m)
 
 # ---------------------------------------------------------------------------
-# Does the installed glog have the LogMessageTime-based LogSink::send()?
-# (0.5.0 and newer; Ubuntu 22.04's "0.5.0+really0.4.0" does not.)
-# ---------------------------------------------------------------------------
-include(CheckCXXSourceCompiles)
-set(CMAKE_REQUIRED_LIBRARIES glog::glog)
-check_cxx_source_compiles("
-#include <glog/logging.h>
-int main() { return static_cast<int>(sizeof(google::LogMessageTime)) > 0 ? 0 : 1; }
-" ATGPU_GLOG_HAS_LOGMESSAGETIME)
-unset(CMAKE_REQUIRED_LIBRARIES)
-if(ATGPU_GLOG_HAS_LOGMESSAGETIME)
-  set(ATGPU_GLOG_HAS_LOGMESSAGETIME_VALUE 1)
-else()
-  set(ATGPU_GLOG_HAS_LOGMESSAGETIME_VALUE 0)
-endif()
-
-# ---------------------------------------------------------------------------
 # The shared library.
 # ---------------------------------------------------------------------------
 set(ATGPU_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../detector")
@@ -192,7 +175,7 @@ set(ATGPU_CORE_SOURCES
 set(ATGPU_API_SOURCES
     src/atgpu_capi.cpp
     src/atgpu_apriltag_common.cpp
-    src/atgpu_fatal_trap.cpp)
+)
 
 if(ATGPU_BACKEND STREQUAL "cuda")
   set(ATGPU_BACKEND_SOURCES src/atgpu_backend_cuda.cu ${ATGPU_CORE_SOURCES})
@@ -214,8 +197,6 @@ target_include_directories(apriltag_gpu_capi
       "${CMAKE_CURRENT_SOURCE_DIR}/src"
       "${ATGPU_APRILTAG_SOURCE_DIR}"
       "${ATGPU_APRILTAG_SOURCE_DIR}/common")
-target_compile_definitions(apriltag_gpu_capi PRIVATE
-    ATGPU_GLOG_HAS_LOGMESSAGETIME=${ATGPU_GLOG_HAS_LOGMESSAGETIME_VALUE})
 target_compile_features(apriltag_gpu_capi PRIVATE cxx_std_20)
 target_link_libraries(apriltag_gpu_capi PRIVATE glog::glog Threads::Threads m)
 set_target_properties(apriltag_gpu_capi PROPERTIES

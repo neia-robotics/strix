@@ -89,6 +89,8 @@ Judge frame rate and `processMs` on the Pi, not the Mac; Apple Silicon is much f
 
 Use a **second** SD card so the competition PhotonVision card stays untouched. We run Ubuntu 22.04 (the Orange Pi image) with Python 3.14 in a venv at `~/vision/coprocessor/venv`.
 
+Owl needs Python **3.11 or newer** on ARM64; Ubuntu 22.04's default Python 3.10 has no wheel for the pinned RobotPy AprilTag package. The requirements select an exact NumPy version for the Python release, including Python 3.14. See the [published wheels](https://pypi.org/project/robotpy-apriltag/2026.2.2/#files).
+
 The Pi usually has **no internet**, so install from wheels downloaded on a Mac. `owl/wheels/` (not in git) holds the aarch64 / cp314 wheels for everything in `requirements.txt`:
 
 ```bash
@@ -284,3 +286,20 @@ If detect time is near or above the frame period (20 ms at 50 fps), raise `quad_
 ## Not included (yet)
 
 A fused single-pose output (by design, the robot fuses per-camera observations itself) and object detection.
+
+## Validation and recovery
+
+Settings from config files, the web page, and NetworkTables are checked before use.
+Invalid edits retain the last valid values and report a rejected-settings status.
+Fatal or stalled camera workers restart; a camera configured for CUDA restarts on
+CPU after a native crash signal and stays there until Owl itself restarts. Capture
+errors and watchdog restarts keep the configured backend. Startup gets a separate
+60-second grace period.
+
+The per-tag RMS consistency gate defaults to 3 pixels (`filters.max_reprojection_error_px`).
+Tune it with real recordings; see [audit repairs](../docs/audit-repairs-2026-10-13.md)
+for the bounded geometry recorder and updated robot integration requirements.
+
+Use the pinned requirements for installation. `--nt-port` selects an isolated NT4
+port for bench tests; the normal robot port remains 5810. The web service is intended
+for a trusted robot network, with same-host cross-camera browser access.

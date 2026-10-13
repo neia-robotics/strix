@@ -52,7 +52,7 @@ cd tusk/java
 ```java
 TuskVision vision = new TuskVision();
 // in periodic():
-vision.update(getPose(), this::addVisionMeasurement);
+vision.update(poseEstimator); // uses sampleAt(captureTime) for delayed frames
 ```
 
 For the AdvantageKit vision template (NEIA's robot code), see [tusk/java/examples/VisionIOTusk.java](tusk/java/examples/VisionIOTusk.java).

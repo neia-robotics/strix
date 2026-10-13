@@ -10,17 +10,22 @@ are the same in both (rotation(), radians(), distance(), subscribe(), publish(),
 from __future__ import annotations
 
 import re
+from importlib.metadata import version
 
 import ntcore
 from wpilib import Preferences, RobotState, Timer
 
 try:  # RobotPy 2026
     from wpimath.geometry import Pose2d, Rotation2d
+    NT_TICKS_PER_SECOND = 1e6
 except ImportError:  # RobotPy 2027
     from wpimath import Pose2d, Rotation2d
+    # Units changed during 2027 development, after alpha-6.
+    alpha = re.match(r"2027\.0\.0a(\d+)", version("pyntcore"))
+    NT_TICKS_PER_SECOND = 1e6 if alpha and int(alpha[1]) < 7 else 1e9
 
 __all__ = ["Pose2d", "Preferences", "Rotation2d", "call", "is_autonomous_enabled",
-           "is_enabled", "now", "queue_options"]
+           "is_enabled", "now", "nt_seconds", "queue_options"]
 
 _CAMEL = re.compile(r"(?<!^)(?=[A-Z])")
 
@@ -56,3 +61,8 @@ def queue_options(poll_storage: int) -> ntcore.PubSubOptions:
         return ntcore.PubSubOptions(sendAll=True, keepDuplicates=True, pollStorage=poll_storage)
     except TypeError:
         return ntcore.PubSubOptions(send_all=True, keep_duplicates=True, poll_storage=poll_storage)
+
+
+def nt_seconds(timestamp: int) -> float:
+    """NT local timestamps changed from microseconds to nanoseconds in 2027 alpha-7."""
+    return timestamp / NT_TICKS_PER_SECOND

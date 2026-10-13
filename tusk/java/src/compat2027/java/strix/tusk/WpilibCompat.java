@@ -10,6 +10,9 @@ import org.wpilib.networktables.PubSubOption;
 final class WpilibCompat {
   private WpilibCompat() {}
 
+  // Pinned WPILib 2027.0.0-alpha-6 still uses microseconds; alpha-7 changes this.
+  static double ntSeconds(long timestamp) { return timestamp / 1e6; }
+
   /** Subscriber options that queue every value (no dropped frames between polls). */
   static PubSubOption[] queueOptions(int pollStorage) {
     return new PubSubOption[] {

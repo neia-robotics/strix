@@ -10,3 +10,5 @@ org.wpilib.util.struct. -> edu.wpi.first.util.struct.
 org.wpilib.util.Preferences -> edu.wpi.first.wpilibj.Preferences
 org.wpilib.system.Timer -> edu.wpi.first.wpilibj.Timer
 org.wpilib.driverstation.RobotState -> edu.wpi.first.wpilibj.RobotState
+org.wpilib.math.estimator. -> edu.wpi.first.math.estimator.
+org.wpilib.math.kinematics. -> edu.wpi.first.math.kinematics.

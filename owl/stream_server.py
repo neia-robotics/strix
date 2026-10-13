@@ -18,15 +18,55 @@ Full resolution; max_fps caps how often a new frame is encoded while watched.
 from __future__ import annotations
 
 import json
+import queue
 import os
 import threading
 import time
+from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
 import numpy as np
 
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_ui.html")
+
+
+class BoundedHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    def __init__(self, *args, **kwargs):
+        self.slots = threading.BoundedSemaphore(32)
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(5)
+        return connection, address
+
+    def process_request(self, request, address):
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self.slots.release()
+
+
+def allowed_origin(origin, host):
+    if not origin:
+        return True  # non-browser clients; this is not authentication
+    try:
+        parsed = urlsplit(origin)
+        return parsed.scheme in ("http", "https") and parsed.hostname == urlsplit("//" + host).hostname
+    except ValueError:
+        return False
 
 
 class _Channel:
@@ -70,7 +110,7 @@ class MjpegStreamServer:
 
     def start(self) -> None:
         threading.Thread(target=self._encoder, daemon=True, name=f"{self.name}-encoder").start()
-        server = ThreadingHTTPServer(("", self.port), self._make_handler())
+        server = BoundedHTTPServer(("", self.port), self._make_handler())
         server.daemon_threads = True
         threading.Thread(target=server.serve_forever, daemon=True, name=f"{self.name}-http").start()
 
@@ -103,6 +143,10 @@ class MjpegStreamServer:
                     with open(_PAGE_PATH, "rb") as f:  # read each time so edits show on reload
                         self._send(200, "text/html; charset=utf-8", f.read())
                     return
+                if path == "/web_helpers.js":
+                    with open(os.path.join(os.path.dirname(_PAGE_PATH), "web_helpers.js"), "rb") as f:
+                        self._send(200, "text/javascript", f.read())
+                    return
                 if path == "/api/state":
                     state = srv.get_state() if srv.get_state else {"name": srv.name}
                     # default=: numpy scalars (np.bool_, np.float64) -> plain Python values
@@ -125,31 +169,47 @@ class MjpegStreamServer:
                     self.send_error(404)
 
             def do_POST(self):
+                if not allowed_origin(self.headers.get("Origin"), self.headers.get("Host", "")) or self.headers.get("Sec-Fetch-Site") == "cross-site":
+                    self.send_error(403, "request origin is not this coprocessor")
+                    return
                 path = self.path.split("?")[0]
                 if srv.on_action is None or path not in ("/api/set", "/api/save", "/api/calib"):
                     self.send_error(404)
                     return
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
+                    if not 0 <= n <= 65536 or self.headers.get("Transfer-Encoding"):
+                        self.send_error(413, "request body too large or unsupported encoding")
+                        return
                     data = json.loads(self.rfile.read(n) or b"{}")
                     if not isinstance(data, dict):
                         raise ValueError("expected a JSON object")
                 except ValueError as e:
                     self.send_error(400, str(e))
                     return
-                if path == "/api/set":
-                    srv.on_action("set", data)
-                elif path == "/api/calib":
-                    srv.on_action("calib", data)
-                else:
-                    srv.on_action("save")
+                try:
+                    if path == "/api/set":
+                        srv.on_action("set", data)
+                    elif path == "/api/calib":
+                        srv.on_action("calib", data)
+                    else:
+                        srv.on_action("save")
+                except ValueError as error:
+                    self.send_error(400, str(error))
+                    return
+                except (TimeoutError, queue.Full):
+                    self.send_error(503, "settings owner is busy or unavailable")
+                    return
                 self._send(200, "application/json", b'{"ok":true}')
 
             def _send(self, code, ctype, body: bytes):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 # One page switches between cameras, and each camera is on its own port.
-                self.send_header("Access-Control-Allow-Origin", "*")
+                origin = self.headers.get("Origin")
+                if origin and allowed_origin(origin, self.headers.get("Host", "")):
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Vary", "Origin")
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
@@ -166,10 +226,8 @@ class MjpegStreamServer:
                 try:
                     while True:
                         with ch.cond:
-                            if ch.seq == last:
-                                ch.cond.wait(timeout=2.0)
-                            if ch.seq == last or ch.jpeg is None:
-                                continue
+                            if not ch.cond.wait_for(lambda: ch.jpeg is not None and ch.seq != last, timeout=10):
+                                return  # stalled camera: release viewer/thread instead of spinning forever
                             data, last = ch.jpeg, ch.seq
                         self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n")
                         self.wfile.write(f"Content-Length: {len(data)}\r\n\r\n".encode())

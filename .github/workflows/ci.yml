@@ -14,7 +14,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install -r owl/requirements.txt
+      - run: pip install -r owl/requirements.txt pytest
+      - run: python -m pytest -q owl/tests
+      - run: node --test owl/tests/web_helpers.test.cjs
+      - run: pip install wpilib==2026.2.2
+      - run: python tests/owl_integration.py
       - name: Synthetic pose test
         working-directory: owl
         run: python test_synthetic.py

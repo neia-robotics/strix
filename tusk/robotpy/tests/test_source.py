@@ -10,7 +10,7 @@ import ntcore
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from tusk import TuskSource, VisionObservation  # noqa: E402
-from tusk._compat import call  # noqa: E402
+from tusk._compat import call, now  # noqa: E402
 
 try:  # RobotPy 2026
     from wpimath.geometry import Pose3d, Rotation3d, Translation3d
@@ -41,7 +41,7 @@ def test_poll_returns_every_camera_oldest_first():
         assert [obs.cameraId for _, obs in got] == [1, 0, 0]
         times = [t for t, _ in got]
         assert times == sorted(times)
-        assert all(math.isfinite(t) for t in times)
+        assert all(math.isfinite(t) and 0 <= now() - t < 0.5 for t in times)
         assert source.poll() == []  # the queue was drained
     finally:
         call(ntcore.NetworkTableInstance, "destroy", inst)
@@ -55,6 +55,9 @@ class FakeEstimator:
         self.measurements = []
 
     def getEstimatedPosition(self):
+        return self.pose
+
+    def sampleAt(self, timestamp):
         return self.pose
 
     def addVisionMeasurement(self, pose, timestamp, std_devs):

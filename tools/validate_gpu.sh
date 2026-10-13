@@ -110,6 +110,16 @@ if [ ! -f "$LIB" ]; then
   die "build failed; see $OUT/log.txt"
 fi
 
+# Refuse stale API-v1 libraries before any detector call.
+"$VPY" - "$LIB" <<'PYTHON' || die "expected freshly built C API version 2"
+import ctypes, sys
+library = ctypes.CDLL(sys.argv[1])
+library.atgpu_api_version.restype = ctypes.c_int32
+version = library.atgpu_api_version()
+print(f"C API version: {version}")
+assert version == 2, f"expected API 2, got {version}"
+PYTHON
+
 # ---- checks ----------------------------------------------------------------
 TESTDATA="$ROOT/native/gpu_detector/testdata"
 SMOKE="$ROOT/native/gpu_detector/capi/test/smoke_ctypes.py"

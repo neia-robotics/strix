@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import tempfile
 import time
 
 import ntcore
+import cv2
 
 from config import AppConfig
+from validation import validate_settings, setting
 
 # name -> (config.json section, key in that section, NT type)
 GLOBAL_SETTINGS = {
@@ -33,6 +34,7 @@ GLOBAL_SETTINGS = {
     "min_cluster_pixels": ("detector", "min_cluster_pixels", int),
     "min_decision_margin": ("filters", "min_decision_margin", float),
     "max_single_tag_ambiguity": ("filters", "max_single_tag_ambiguity", float),
+    "max_reprojection_error_px": ("filters", "max_reprojection_error_px", float),
     "max_tag_distance_m": ("filters", "max_tag_distance_m", float),
     "stream_max_fps": ("stream", "max_fps", float),
     "board_squares_x": ("calibration_board", "squares_x", int),
@@ -43,9 +45,6 @@ GLOBAL_SETTINGS = {
     "board_legacy": ("calibration_board", "legacy", bool),
 }
 CAMERA_SETTINGS = {"exposure": float, "gain": float, "std_dev_factor": float, "resolution": str}
-
-_RESOLUTION = re.compile(r"^\d{2,5}x\d{2,5}$")
-
 
 def parse_resolution(text: str) -> tuple[int, int]:
     w, h = text.split("x")
@@ -66,17 +65,6 @@ def _entry(inst, path, typ, value):
         e = inst.getDoubleTopic(path).getEntry(float(value))
         e.set(float(value))
     return e
-
-
-def _coerce(typ, v):
-    """Web/JSON value -> setting type (raises ValueError/TypeError if it can't)."""
-    if typ is int:
-        return int(float(v))
-    if typ is bool:
-        return bool(v)
-    if typ is str:
-        return str(v)
-    return float(v)
 
 
 class LiveSettings:
@@ -129,26 +117,29 @@ class LiveSettings:
     def set_from_web(self, cam_id: int, changes: dict):
         """Apply changes sent from a camera's web page by writing them to the NT entries,
         so dashboards see them too and the next poll() handles them like any NT edit."""
-        for name, v in changes.items():
-            try:
+        try:
+            if not isinstance(changes, dict) or cam_id not in self.cam_values:
+                raise ValueError("invalid camera/settings request")
+            global_values = {k: e.get() for k, e in self.entries.items()}
+            camera_values = {k: e.get() for k, e in self.cam_entries[cam_id].items()}
+            for name, value in changes.items():
                 if name in GLOBAL_SETTINGS:
-                    v = _coerce(GLOBAL_SETTINGS[name][2], v)
-                    if name == "board_dict":
-                        v = v.strip().upper()
-                        if not v.startswith("DICT_"):
-                            raise ValueError("expected a name like DICT_5X5_1000")
-                    self.entries[name].set(v)
-                elif name in CAMERA_SETTINGS and cam_id in self.cam_entries:
-                    typ = CAMERA_SETTINGS[name]
-                    if typ is str:
-                        v = str(v).strip().lower()
-                        if name == "resolution" and not _RESOLUTION.match(v):
-                            raise ValueError("expected WIDTHxHEIGHT")
-                        self.cam_entries[cam_id][name].set(v)
-                    else:
-                        self.cam_entries[cam_id][name].set(-1.0 if v is None else float(v))
-            except (TypeError, ValueError) as e:
-                print(f"settings: ignoring bad value from web: {name}={v!r} ({e})", flush=True)
+                    global_values[name] = value
+                elif name in CAMERA_SETTINGS:
+                    camera_values[name] = value
+                else:
+                    raise ValueError(f"unknown setting: {name}")
+            global_values = validate_settings(global_values)
+            camera_values = validate_settings(camera_values)
+            for name in changes:
+                if name in GLOBAL_SETTINGS:
+                    self.entries[name].set(global_values[name])
+                else:
+                    self.cam_entries[cam_id][name].set(camera_values[name])
+            return True
+        except (TypeError, ValueError, OverflowError, cv2.error) as e:
+            self._set_status(f"settings rejected: {e}")
+            return False
 
     def request_save(self):
         self.save_entry.set(True)
@@ -167,28 +158,40 @@ class LiveSettings:
 
     def poll(self) -> tuple[dict, dict[int, dict]]:
         """Returns (global changes, per-camera changes) since the last poll."""
-        g = {}
-        for name, e in self.entries.items():
-            v = GLOBAL_SETTINGS[name][2](e.get())
-            if v != self.values[name]:
-                self.values[name] = v
-                g[name] = v
+        rejected = []
+        def checked(entries, previous):
+            candidate = dict(previous)
+            for key, entry in entries.items():
+                try:
+                    candidate[key] = setting(key, entry.get())
+                except (ValueError, TypeError, OverflowError, cv2.error) as error:
+                    entry.set(previous[key])
+                    rejected.append(str(error))
+            try:
+                validate_settings(candidate)
+            except (ValueError, TypeError, OverflowError, cv2.error) as error:
+                # Board dimensions/dictionary form one dependent group. Other edits survive.
+                for key, entry in entries.items():
+                    if key.startswith("board_"):
+                        candidate[key] = previous[key]
+                        entry.set(previous[key])
+                rejected.append(str(error))
+            changes = {k: v for k, v in candidate.items() if v != previous[k]}
+            previous.update(changes)
+            return changes
+
+        g = checked(self.entries, self.values)
         per_cam = {}
-        for cam_id, ents in self.cam_entries.items():
-            changed = {}
-            for k, e in ents.items():
-                v = CAMERA_SETTINGS[k](e.get())
-                if k == "resolution" and not _RESOLUTION.match(v):
-                    e.set(self.cam_values[cam_id][k])  # typo from a dashboard: put it back
-                    continue
-                if v != self.cam_values[cam_id][k]:
-                    self.cam_values[cam_id][k] = v
-                    changed[k] = v
-            if changed:
-                per_cam[cam_id] = self.camera_message(changed)
+        for cam_id, entries in self.cam_entries.items():
+            changes = checked(entries, self.cam_values[cam_id])
+            if changes:
+                per_cam[cam_id] = self.camera_message(changes)
         if g or per_cam:
             self.dirty = True
             self._set_status("unsaved changes")
+
+        if rejected:
+            self._set_status("settings rejected: " + "; ".join(rejected))
 
         if self.save_entry.get():
             self.save_entry.set(False)

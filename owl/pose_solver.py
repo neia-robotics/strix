@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from collections import Counter
 
 import cv2
 import numpy as np
@@ -76,6 +77,7 @@ def _make_cpu_detector(ds: DetectorSettings) -> AprilTagDetector:
 @dataclass
 class SolverSettings:
     tag_size_m: float = 0.1651
+    max_reprojection_error_px: float = 3.0  # maximum RMS corner error for ANY tag; tune from recordings
     max_hamming: int = 0
     min_decision_margin: float = 25.0
     max_single_tag_ambiguity: float = 0.4  # the robot's gyro resolves the rest
@@ -129,12 +131,15 @@ class PoseSolver:
 
     def filter_detections(self, detections: list[AprilTagDetection]) -> list[AprilTagDetection]:
         out = []
+        counts = Counter(d.getId() for d in detections)
         for d in detections:
+            if counts[d.getId()] != 1:
+                continue  # no safe way to choose between duplicate IDs
             if d.getId() not in self.tag_corners:
                 continue
             if d.getHamming() > self.s.max_hamming:
                 continue
-            if d.getDecisionMargin() < self.s.min_decision_margin:
+            if not math.isfinite(d.getDecisionMargin()) or d.getDecisionMargin() < self.s.min_decision_margin:
                 continue
             out.append(d)
         return out
@@ -148,6 +153,10 @@ class PoseSolver:
         std_dev_factor: float = 1.0,
     ) -> PoseResult | None:
         self.last_reject = None
+        self.last_quality = {}
+        if not math.isfinite(std_dev_factor) or std_dev_factor <= 0:
+            self.last_reject = "invalid confidence factor"
+            return None
         dets = self.filter_detections(detections)
         if not dets:
             self.last_reject = "no usable tags (decision margin, hamming or unknown id)" if detections else None
@@ -160,6 +169,9 @@ class PoseSolver:
             dtype=np.float64,
         )
 
+        if not np.isfinite(img).all() or not np.isfinite(camera_matrix).all() or not np.isfinite(dist_coeffs).all():
+            self.last_reject = "nonfinite image or calibration"
+            return None
         ambiguity = 0.0
         if len(dets) == 1:
             n, rvecs, tvecs, errs = cv2.solvePnPGeneric(
@@ -191,6 +203,19 @@ class PoseSolver:
         # robot only the plausible one.
         valid = []
         for rvec, tvec, reproj in candidates:
+            if not np.isfinite(rvec).all() or not np.isfinite(tvec).all() or not math.isfinite(reproj):
+                self.last_reject = "nonfinite pose solution"
+                continue
+            projected, _ = cv2.projectPoints(obj, rvec, tvec, camera_matrix, dist_coeffs)
+            errors = np.linalg.norm(projected.reshape(-1, 2) - img, axis=1).reshape(-1, 4)
+            rms = np.sqrt(np.mean(errors ** 2, axis=1))
+            if not valid:  # keep residuals for the selected candidate, not a later rejected flip
+                self.last_quality = {str(tid): float(err) for tid, err in zip(ids, rms)}
+            rotation, _ = cv2.Rodrigues(rvec)
+            depths = (obj @ rotation.T + tvec.reshape(1, 3))[:, 2]
+            if not np.isfinite(rms).all() or max(rms) > self.s.max_reprojection_error_px or min(depths) <= 0:
+                self.last_reject = "inconsistent tag corners / reprojection error"
+                continue
             camera_pose = self._camera_pose(rvec, tvec)
             robot_pose = camera_pose.transformBy(robot_to_camera.inverse())
             reject = self._pose_reject(robot_pose)

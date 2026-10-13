@@ -10,6 +10,8 @@ import edu.wpi.first.networktables.PubSubOption;
 final class WpilibCompat {
   private WpilibCompat() {}
 
+  static double ntSeconds(long timestamp) { return timestamp / 1e6; }
+
   /** Subscriber options that queue every value (no dropped frames between polls). */
   static PubSubOption[] queueOptions(int pollStorage) {
     return new PubSubOption[] {

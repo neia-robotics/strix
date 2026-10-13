@@ -66,3 +66,12 @@ These ran on a Mac against the published alpha builds. Nothing has run on a Syst
 - Owl finds the robot by team number. Check that Systemcore's NT server is reachable the same way (address, port 5810) once one is available.
 - Tusk converts NT message times to capture times with the robot's `Timer.getTimestamp()`. On 2027 that's `RobotController.getTime()`; confirm on Systemcore that NT's local timestamps use the same clock.
 - The AdvantageKit example adapter targets the 2026 template; 2027 AdvantageKit hasn't been checked.
+
+### Timestamp units
+
+NetworkTables timestamps are microseconds in 2026 and 2027 alpha-6, and nanoseconds
+in RobotPy 2027 alpha-7. Python checks the installed release; Java keeps microseconds
+for its pinned alpha-6. When upgrading Java beyond alpha-6, update its compatibility
+conversion and regression test. Both layers convert to seconds before subtracting observation
+age or checking heartbeat freshness. The cross-season integration test checks the
+result against the robot clock, in addition to checking struct contents.

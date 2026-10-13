@@ -7,7 +7,7 @@
 //
 // Backends may throw std::runtime_error from the factory and from Detect*();
 // the C layer converts those into ATGPU_ERROR_BACKEND.  glog CHECK failures
-// are intercepted separately by atgpu::FatalTrap.
+// terminate the worker process; the supervisor restarts on CPU.
 #ifndef ATGPU_BACKEND_H_
 #define ATGPU_BACKEND_H_
 

@@ -50,8 +50,7 @@ What has been verified:
   24.04 in CI): builds, exports only `atgpu_*`, passes
   `atgpu_capi_test` (reference detections match WPILib's detector within
   0.02 px on the repo's test images), passes the ctypes smoke script, and the
-  glog fatal-error trap converts a simulated CHECK failure into
-  `ATGPU_ERROR_FATAL_TRAPPED`.
+  isolated subprocess terminates on a simulated CHECK failure.
 * The CMake logic for offline dependency resolution and for downloading.
 
 Still untested: an ARM host with a GPU, CUDA 12 on Ubuntu 22.04 at runtime (JetPack 6's
@@ -146,26 +145,18 @@ configuration set `min_cluster_pixels = 300` and
 rows is rejected with `ATGPU_ERROR_UNSUPPORTED_SETTING` rather than silently
 ignored.
 
-### Error handling and the fatal trap
+### Error handling and process isolation
 
-Two layers:
+Arguments are checked before entering the detector. Recoverable C++ exceptions
+become status codes and `atgpu_last_error()` messages. Native `CHECK` / `LOG(FATAL)`
+failures terminate the calling process. Do not attempt to resume a damaged CUDA
+context or jump across C++ stack frames. Run this library in an isolated worker.
 
-1. `atgpu_validate`/`atgpu_create`/`atgpu_detect` check geometry, settings,
-   camera model and frame size before the detector is touched, covering every
-   `CHECK` in the core that depends on caller input (width/height multiples of
-   8 and within 32..2048, `width * height < 2^22`, `quad_decimate == 2`,
-   `deglitch == 0`, `max_nmaxima == 10`, one border type).
-2. For failures that cannot be checked up front (CUDA out of memory, no usable
-   GPU, a kernel fault, the `CHECK_LT` on boundary-point count for a
-   pathological frame), the library installs a glog failure function and log
-   sink (`src/atgpu_fatal_trap.cpp`).  A `CHECK` fired on the calling thread
-   inside an `atgpu_*` call becomes `ATGPU_ERROR_FATAL_TRAPPED` with the CHECK
-   message in `atgpu_last_error()`, the handle is marked poisoned, and the
-   process stays alive so it can log, destroy the handle and fall back to the
-   CPU detector.  Partially built objects are leaked and a sticky CUDA error
-   still leaves the context dead, so treat this as "GPU backend unavailable,
-   restart when convenient", not as a recoverable per-frame error.  A `CHECK`
-   on any other thread aborts as before.
+Owl restarts crashed or stalled workers. Native crash signals trigger CPU fallback
+for that camera until Owl restarts, including failures during detector construction.
+Capture failures and watchdog restarts retain the configured backend. Its
+other cameras and NetworkTables publisher continue running. Legacy fatal/poisoned
+status numbers remain reserved for ABI compatibility but are no longer returned.
 
 ## Building on a Jetson Orin Nano
 
@@ -266,8 +257,9 @@ struct-size checks against `atgpu_sizeof_*`, contiguous-frame handling).
    runtime/driver versions).  If it fails, the CUDA runtime/driver pairing is
    wrong before anything else matters.
 2. The error-handling section of the same run: must end with
-   `PASSED` and never abort.  An abort here means a `CHECK` fired outside the
-   trap (look for `*** Check failure stack trace ***` on stderr).
+   `PASSED`. On Linux, the CPU test deliberately aborts an isolated child
+   (skipped on macOS to avoid Crash Reporter dialogs). Other aborts
+   indicate a native failure (look for `*** Check failure stack trace ***` on stderr).
 3. The three images: ids 554 / none / 585, corners within 0.5 px of the
    reference, margins near 117 / 101.  A `CHECK_LT` on boundary points or an
    "invalid device function" style message points at wrong
@@ -314,14 +306,17 @@ constructor and `Detect` signatures hold.
 | path | purpose |
 | --- | --- |
 | `include/apriltag_gpu_capi.h` | the public C API |
-| `src/atgpu_capi.cpp` | validation, handle, error messages, trap usage |
+| `src/atgpu_capi.cpp` | validation, handle, error messages |
 | `src/atgpu_backend.h` | internal backend interface |
 | `src/atgpu_backend_cuda.cu` | wraps `GpuDetector` (the real backend) |
 | `src/atgpu_backend_cpu.cpp` | host-only reference backend for testing |
 | `src/atgpu_apriltag_common.*` | `apriltag_detector_t` setup from settings, detection copy |
-| `src/atgpu_fatal_trap.*` | glog CHECK -> status code |
 | `src/atgpu_exports.map` | ld version script, exports `atgpu_*` only |
 | `test/atgpu_capi_test.cpp` | C test program |
 | `test/smoke_ctypes.py` | ctypes smoke test and reference wrapper |
 | `test/check_exports.sh` | symbol export check |
 | `fetch_deps.sh` | pre-download CCCL + apriltag fork for offline builds |
+
+The native C API is now version 2 because fatal-error recovery semantics changed.
+Rebuild the optional GPU library with this checkout. Owl rejects older version-1
+libraries and runs on CPU, preventing reuse of the removed longjmp recovery path.

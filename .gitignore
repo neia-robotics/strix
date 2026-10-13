@@ -34,3 +34,6 @@ networktables.json*
 
 # tools/validate_gpu.sh output
 gpu-validation/
+
+# Local assistant working notes
+skill-observations/

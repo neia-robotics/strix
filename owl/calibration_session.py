@@ -22,11 +22,9 @@ import datetime
 import json
 import math
 import os
-import struct
 import tempfile
 import threading
 import time
-import zlib
 
 import cv2
 import numpy as np
@@ -61,17 +59,8 @@ def make_board(b: dict):
 def board_png(b: dict, dpi: int = 300) -> bytes:
     """Printable board image with its DPI recorded, so it prints at true size at 100%."""
     board = make_board(b)
-    cols, rows = board.getChessboardSize()
-    px = max(1, round(board.getSquareLength() / 0.0254 * dpi))
-    img = board.generateImage((cols * px, rows * px), marginSize=px // 2, borderBits=1)
-    ok, buf = cv2.imencode(".png", img)
-    data = buf.tobytes()
-    # Insert a pHYs chunk (pixels per meter) right after IHDR so viewers know the DPI.
-    ppm = round(dpi / 0.0254)
-    body = b"pHYs" + struct.pack(">IIB", ppm, ppm, 1)
-    chunk = struct.pack(">I", 9) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
-    ihdr_end = 8 + 8 + 13 + 4
-    return data[:ihdr_end] + chunk + data[ihdr_end:]
+    from board_image import render_board_png
+    return render_board_png(board, dpi)
 
 
 def _region_name(col: float, row: float) -> str:

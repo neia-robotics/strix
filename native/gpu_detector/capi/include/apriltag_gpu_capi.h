@@ -4,8 +4,9 @@
  *
  * Designed to be loaded from Python through ctypes: every type crossing the
  * boundary is a plain C struct of fixed-width integers and doubles, no C++
- * types or exceptions escape, and every failure is reported as a status code
- * plus a readable message from atgpu_last_error().
+ * types or recoverable exceptions escape. Recoverable failures return a status code
+ * plus a readable message from atgpu_last_error(). Fatal native failures abort
+ * the calling process: use process isolation and restart on CPU.
  *
  * Typical use:
  *
@@ -92,7 +93,7 @@ extern "C" {
 #endif
 
 /* Bump when the structs or function signatures below change. */
-#define ATGPU_API_VERSION 1
+#define ATGPU_API_VERSION 2  /* Fatal failures require process isolation. */
 
 /* Image geometry accepted by atgpu_validate()/atgpu_create().  These mirror
  * the CHECKs and bit-packing limits of the GPU pipeline (see README). */
@@ -122,11 +123,9 @@ typedef enum atgpu_status {
   ATGPU_ERROR_BAD_CAMERA_MODEL = -4,
   /* The detector backend reported a failure (e.g. tag family allocation). */
   ATGPU_ERROR_BACKEND = -5,
-  /* A glog CHECK or CUDA error inside the detector was intercepted instead of
-   * aborting the process.  The handle is unusable afterwards: destroy it.
-   * atgpu_last_error() carries the original CHECK message. */
+  /* Reserved legacy status; current builds let fatal native failures abort. */
   ATGPU_ERROR_FATAL_TRAPPED = -6,
-  /* The handle previously returned ATGPU_ERROR_FATAL_TRAPPED. */
+  /* Reserved legacy status; no longer returned. */
   ATGPU_ERROR_POISONED = -7
 } atgpu_status;
 

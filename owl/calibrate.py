@@ -143,14 +143,10 @@ def check_gui_support():
 
 
 def generate_board(board, path, dpi):
-    cols, rows = board.getChessboardSize()
-    px_per_square = max(1, round(board.getSquareLength() / 0.0254 * dpi))
-    margin = px_per_square // 2
-    img = board.generateImage(
-        (cols * px_per_square, rows * px_per_square), marginSize=margin, borderBits=1
-    )
-    cv2.imwrite(path, img)
-    print(f"saved {path} ({img.shape[1]}x{img.shape[0]}px, {dpi} dpi)")
+    from board_image import render_board_png
+    from pathlib import Path
+    Path(path).write_bytes(render_board_png(board, dpi))
+    print(f"saved {path} ({dpi} dpi)")
     print(f"print at 100% scale (no 'fit to page'); square = "
           f"{board.getSquareLength() * 1000:.1f}mm, marker = {board.getMarkerLength() * 1000:.1f}mm -- "
           f"measure a printed square to check your printer didn't rescale it")

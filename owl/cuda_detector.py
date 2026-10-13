@@ -7,8 +7,9 @@ in the same corner order and in raw (distorted) image pixels, so the solver and
 the stream overlay don't care which backend ran.
 
 Anything that stops the GPU path -- library missing, a resolution it can't take,
-an error inside the detector -- switches this camera to the CPU detector and logs
-why, so a camera never goes dark because of the GPU.
+a recoverable error -- switches this camera to the CPU detector and logs why.
+Fatal native failures terminate the worker; the supervisor restarts that camera
+on CPU and retains that fallback until Owl itself restarts.
 
 What the GPU pipeline fixes (see native/gpu_detector/capi/README.md):
   - decimation is always 2
@@ -25,7 +26,7 @@ import sys
 
 import numpy as np
 
-API_VERSION = 1
+API_VERSION = 2  # process-isolated fatal recovery; refuse legacy longjmp libraries
 FORMAT_GRAY8 = 0
 FAMILIES = {"tag36h11": 0}
 # Statuses after which the native handle (and possibly the CUDA context) is unusable.
@@ -189,7 +190,7 @@ class CudaDetector:
                     f"{LIB_NAME} not found (set detector.cuda_library in config.json or ${LIB_ENV})")
             self._lib = _load(path)
             self.backend = self._lib.atgpu_backend_name().decode()
-        except (CudaDetectorError, OSError) as e:
+        except (CudaDetectorError, OSError, AttributeError) as e:
             self._fall_back(str(e))
             return
 

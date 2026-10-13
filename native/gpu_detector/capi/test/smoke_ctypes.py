@@ -114,7 +114,7 @@ class AprilTagGpu:
         lib.atgpu_device_info.argtypes = [C.c_char_p, C.c_size_t]
         lib.atgpu_device_info.restype = C.c_int32
 
-        if lib.atgpu_api_version() != 1:
+        if lib.atgpu_api_version() != 2:
             raise AprilTagGpuError(f"unexpected API version {lib.atgpu_api_version()}")
         for name, py_type in (("settings", Settings), ("camera_model", CameraModel),
                               ("detection", Detection)):

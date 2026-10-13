@@ -22,7 +22,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tusk" / "robotpy"))
 
 from tusk import TuskSource, VisionObservation  # noqa: E402
-from tusk._compat import call  # noqa: E402
+from tusk._compat import call, now  # noqa: E402
 
 try:  # RobotPy 2026
     from wpimath.geometry import Pose3d, Rotation3d, Translation3d
@@ -59,6 +59,7 @@ def robot(timeout_s: float = 15.0) -> int:
         return 1
     ids = sorted(obs.cameraId for _, obs in got)
     pose = got[0][1].robotPose
+    assert all(0 <= now() - timestamp < 1 for timestamp, _ in got), "capture timestamps must use robot seconds"
     ok = ids == [0, 1] and math.isclose(call(pose, "X"), 3.0) and got[0][1].tagMask == 0b110
     print(f"robot: received cameras {ids}, x={call(pose, 'X'):.2f} -> {'OK' if ok else 'MISMATCH'}",
           flush=True)

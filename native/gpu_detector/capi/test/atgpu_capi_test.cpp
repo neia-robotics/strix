@@ -1,3 +1,6 @@
+#include <sys/wait.h>
+#include <unistd.h>
+#include <csignal>
 // Test program for the C API.  Runs the detector on the repo's test images and
 // checks the results against WPILib's CPU detector, and checks that invalid
 // inputs come back as errors instead of aborting the process.
@@ -291,18 +294,25 @@ void RunErrorTests() {
                       std::to_string(n) + (n < 0 ? " " + LastError() : "") + ")");
     Check(atgpu_num_detections(det) == 0, "atgpu_num_detections == 0");
 
+#if !defined(__APPLE__)
+    // Intentional aborts summon macOS Crash Reporter; exercise this in Linux CI.
     if (std::string(atgpu_backend_name()) == "cpu") {
-      // Exercise the glog fatal trap through the cpu backend's test hook.
-      setenv("ATGPU_CPU_BACKEND_FORCE_FATAL", "1", 1);
-      const int32_t rc = atgpu_detect(det, frame.data(), frame.size(), ATGPU_FORMAT_GRAY8);
-      unsetenv("ATGPU_CPU_BACKEND_FORCE_FATAL");
-      Check(rc == ATGPU_ERROR_FATAL_TRAPPED,
-            "simulated CHECK failure trapped: " + std::string(atgpu_status_name(rc)) +
-                " / " + LastError());
-      Check(atgpu_detect(det, frame.data(), frame.size(), ATGPU_FORMAT_GRAY8) ==
-                ATGPU_ERROR_POISONED,
-            "handle is poisoned afterwards: " + LastError());
+      // Fatal native failures must terminate a child, never resume damaged C++/CUDA state.
+      const pid_t child = fork();
+      if (child == 0) {
+        setenv("ATGPU_CPU_BACKEND_FORCE_FATAL", "1", 1);
+        atgpu_detect(det, frame.data(), frame.size(), ATGPU_FORMAT_GRAY8);
+        _exit(99);
+      }
+      Check(child > 0, "fork fatal-isolation child");
+      int status = 0;
+      if (child > 0) {
+        waitpid(child, &status, 0);
+        Check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+              "fatal detector failure terminates isolated process");
+      }
     }
+#endif
     atgpu_destroy(det);
   }
   atgpu_destroy(nullptr);  // allowed

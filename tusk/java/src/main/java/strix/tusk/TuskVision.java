@@ -5,7 +5,8 @@
 package strix.tusk;
 
 import org.wpilib.math.linalg.Matrix;
-import org.wpilib.math.linalg.VecBuilder;
+import org.wpilib.math.estimator.PoseEstimator;
+import org.wpilib.system.Timer;
 import org.wpilib.math.geometry.Pose2d;
 import org.wpilib.math.numbers.N1;
 import org.wpilib.math.numbers.N3;
@@ -14,6 +15,8 @@ import org.wpilib.util.Preferences;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalDouble;
+import java.util.Optional;
+import java.util.function.DoubleFunction;
 
 /**
  * Minimal consumer: feeds every observation into a pose estimator, with std devs from WPILib
@@ -29,7 +32,7 @@ import java.util.OptionalDouble;
  * <p>Usage, e.g. in a drive subsystem's periodic():
  *
  * <pre>
- *   vision.update(getPose(), this::addVisionMeasurement);
+ *   vision.update(poseEstimator); // uses sampleAt() for each capture timestamp
  * </pre>
  */
 public class TuskVision {
@@ -49,6 +52,7 @@ public class TuskVision {
 
   private final TuskSource source;
   private final OptionalDouble maxSingleTagJumpM;
+  private final OptionalDouble maxMultiTagJumpM;
   private final OptionalDouble maxSingleTagYawErrorRad;
   private List<Result> lastObservations = List.of();
 
@@ -59,13 +63,23 @@ public class TuskVision {
 
   /**
    * While enabled, single-tag observations are rejected if they're more than {@code
-   * maxSingleTagJumpM} from the current estimate or their heading is more than {@code
-   * maxSingleTagYawErrorDeg} off it. Empty disables either check. While disabled everything is
+   * maxSingleTagJumpM} from the capture-time estimate or their heading is more than {@code
+   * maxSingleTagYawErrorDeg} off it. Empty disables either check. While disabled valid measurements are
    * accepted, so vision can seed the starting pose.
    */
   public TuskVision(
       TuskSource source, OptionalDouble maxSingleTagJumpM, OptionalDouble maxSingleTagYawErrorDeg) {
+    this(source, maxSingleTagJumpM, maxSingleTagYawErrorDeg, OptionalDouble.of(2.0));
+  }
+
+  public TuskVision(TuskSource source, OptionalDouble maxSingleTagJumpM,
+      OptionalDouble maxSingleTagYawErrorDeg, OptionalDouble maxMultiTagJumpM) {
+    for (var limit : List.of(maxSingleTagJumpM, maxSingleTagYawErrorDeg, maxMultiTagJumpM)) {
+      if (limit.isPresent() && (!Double.isFinite(limit.getAsDouble()) || limit.getAsDouble() <= 0))
+        throw new IllegalArgumentException("pose rejection limits must be finite and positive");
+    }
     this.source = source;
+    this.maxMultiTagJumpM = maxMultiTagJumpM;
     this.maxSingleTagJumpM = maxSingleTagJumpM;
     this.maxSingleTagYawErrorRad =
         maxSingleTagYawErrorDeg.isPresent()
@@ -91,36 +105,34 @@ public class TuskVision {
   }
 
   public Matrix<N3, N1> stdDevs(VisionObservation obs) {
-    double xy = Preferences.getDouble(XY_KEY, 0.01) * obs.stdDevFactor();
-    double theta;
-    if (obs.tagCount() == 1 && !Preferences.getBoolean(TRUST_THETA_KEY, false)) {
-      theta = Double.POSITIVE_INFINITY; // one tag's heading is unreliable; the gyro owns heading
-    } else {
-      theta = Preferences.getDouble(THETA_KEY, 0.03) * obs.stdDevFactor();
-    }
-    return VecBuilder.fill(xy, xy, theta);
+    return Tusk.stdDevs(obs, Preferences.getDouble(XY_KEY, 0.01),
+        Preferences.getDouble(THETA_KEY, 0.03), Preferences.getBoolean(TRUST_THETA_KEY, false));
   }
 
-  /** Feeds all new observations into {@code consumer}. Returns the number accepted. */
-  public int update(Pose2d currentEstimate, VisionConsumer consumer) {
+  /** Preferred API: use WPILib's existing history instead of comparing to the current heading. */
+  public int update(PoseEstimator<?> estimator) {
+    return update(estimator.getEstimatedPosition(), estimator::sampleAt, estimator::addVisionMeasurement);
+  }
+
+  /** Feeds valid measurements using capture-time history. Returns the number accepted. */
+  public int update(Pose2d currentEstimate, DoubleFunction<Optional<Pose2d>> sampleAt,
+      VisionConsumer consumer) {
     boolean enabled = RobotState.isEnabled();
     int accepted = 0;
     List<Result> results = new ArrayList<>();
     for (var timed : source.poll()) {
       VisionObservation obs = timed.observation();
-      var pose =
-          Tusk.selectPose(
-              obs,
-              currentEstimate.getRotation(),
-              enabled ? maxSingleTagYawErrorRad : OptionalDouble.empty());
+      var pose = Tusk.selectTimedPose(obs, timed.captureTimeSeconds(), Timer.getTimestamp(),
+          sampleAt, currentEstimate, enabled, maxSingleTagJumpM,
+          maxSingleTagYawErrorRad, maxMultiTagJumpM);
       boolean ok = pose.isPresent();
-      if (ok && obs.tagCount() == 1 && maxSingleTagJumpM.isPresent() && enabled) {
-        ok =
-            pose.get().getTranslation().getDistance(currentEstimate.getTranslation())
-                <= maxSingleTagJumpM.getAsDouble();
+      Matrix<N3, N1> deviations = null;
+      if (ok) {
+        try { deviations = stdDevs(obs); }
+        catch (IllegalArgumentException e) { ok = false; }
       }
       if (ok) {
-        consumer.accept(pose.get(), timed.captureTimeSeconds(), stdDevs(obs));
+        consumer.accept(pose.get(), timed.captureTimeSeconds(), deviations);
         accepted++;
       }
       results.add(new Result(timed.captureTimeSeconds(), obs, ok));

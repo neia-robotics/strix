@@ -15,6 +15,8 @@ stream per camera registered under /CameraPublisher so dashboards find it.
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import math
 import multiprocessing as mp
 import os
 import queue
@@ -24,6 +26,7 @@ import threading
 import time
 
 from config import load_config
+from recovery import needs_restart, needs_cpu_fallback
 
 
 def local_ips() -> list[str]:
@@ -69,7 +72,10 @@ def main():
     ap.add_argument("--standalone", action="store_true",
                     help="run our own NT server (bench testing without a roboRIO)")
     ap.add_argument("--server", help="NT server IP override (e.g. 127.0.0.1 for sim)")
+    ap.add_argument("--nt-port", type=int, default=5810, help="NT4 port for isolated bench tests")
     args = ap.parse_args()
+    if not 1024 <= args.nt_port <= 65535:
+        ap.error("--nt-port must be between 1024 and 65535")
 
     cfg = load_config(args.config)
     if args.standalone:
@@ -83,7 +89,11 @@ def main():
 
     ctx = mp.get_context("spawn")
     q = ctx.Queue(maxsize=256)
-    procs, ctrls = {}, {}
+    procs, ctrls, pending_controls = {}, {}, {}
+    last_seen = {}
+    reported = set()
+    cpu_only = set()
+    save_replies = []
     restarts = {c.id: 0 for c in cfg.cameras}  # for the web page's diagnostics tab
     owl_started = time.time()
 
@@ -91,12 +101,31 @@ def main():
     peers = [{"name": c.name, "port": c.stream_port} for c in cfg.cameras]
 
     def start(cam):
-        ctrls[cam.id] = ctx.Queue()
+        old = ctrls.get(cam.id)
+        if old is not None:
+            old.cancel_join_thread()
+            old.close()
+        ctrls[cam.id] = ctx.Queue(maxsize=4)
+        pending_controls[cam.id] = {}
+        detector = dataclasses.replace(cfg.detector, backend="cpu") if cam.id in cpu_only else cfg.detector
+        last_seen[cam.id] = time.monotonic()
+        reported.discard(cam.id)
         p = ctx.Process(target=run_camera, name=cam.name, daemon=True,
-                        args=(cam, cfg.field_layout, cfg.detector, cfg.solver, cfg.stream,
+                        args=(cam, cfg.field_layout, detector, cfg.solver, cfg.stream,
                               q, ctrls[cam.id], peers))
         p.start()
         procs[cam.id] = p
+
+    def send_control(cam_id, changes):
+        if "_acks" in changes:
+            changes = dict(changes)
+            pending_controls[cam_id].setdefault("_acks", []).extend(changes.pop("_acks"))
+        pending_controls[cam_id].update(changes)
+        try:
+            ctrls[cam_id].put_nowait(pending_controls[cam_id])
+        except queue.Full:
+            return  # merge and retry next loop; a stuck worker cannot grow the queue
+        pending_controls[cam_id] = {}
 
     for cam in cfg.cameras:
         start(cam)
@@ -110,12 +139,12 @@ def main():
 
     inst = ntcore.NetworkTableInstance.getDefault()
     if cfg.standalone:
-        inst.startServer()
+        inst.startServer("networktables.json", "", 0, args.nt_port)
         print("NT: running standalone server", flush=True)
     else:
         inst.startClient4(cfg.client_name)
         if cfg.server:
-            inst.setServer(cfg.server)
+            inst.setServer(cfg.server, args.nt_port)
         elif cfg.team is not None:
             inst.setServerTeam(cfg.team)
         else:
@@ -199,7 +228,7 @@ def main():
                 "throttle_fps": throttle}
 
     for cam in cfg.cameras:
-        ctrls[cam.id].put(initial_settings(cam.id))
+        send_control(cam.id, initial_settings(cam.id))
     last_status = settings.status_text
 
     heartbeat = 0
@@ -217,15 +246,20 @@ def main():
         if msg[0] == "obs":
             batch.append(msg[1])
         elif msg[0] == "stats":
-            _, cam_id, connected, fps, proc_ms, tag_fps, stream_fps, viewers, reject = msg
+            _, cam_id, connected, fps, proc_ms, tag_fps, stream_fps, viewers, reject, initialized = msg
+            last_seen[cam_id] = time.monotonic()
+            if initialized:
+                reported.add(cam_id)
             p = stat_pubs[cam_id]
             p["connected"].set(bool(connected)); p["fps"].set(fps); p["processMs"].set(proc_ms)
             p["tagFps"].set(tag_fps); p["streamFps"].set(stream_fps)
             p["streamViewers"].set(viewers); p["lastReject"].set(reject)
         elif msg[0] == "set":  # from a camera's web settings page
-            settings.set_from_web(msg[1], msg[2])
+            ok = settings.set_from_web(msg[1], msg[2])
+            send_control(msg[1], {"_acks": [{"id": msg[3], "ok": ok, "status": settings.status_text}]})
         elif msg[0] == "save":
             settings.request_save()
+            save_replies.append((msg[1], msg[3]))
 
     while True:
         t_loop = time.monotonic()
@@ -267,19 +301,26 @@ def main():
         if now - last_settings > 0.1:  # live settings -> camera processes
             last_settings = now
             g, per_cam = settings.poll()
+            for cam_id, request_id in save_replies:
+                send_control(cam_id, {"_acks": [{"id": request_id,
+                    "ok": settings.status_text.startswith("saved "), "status": settings.status_text}]})
+            save_replies.clear()
+            for cam_id in pending_controls:
+                if pending_controls[cam_id]:
+                    send_control(cam_id, {})
             for cam in cfg.cameras:
                 msg = {**g, **per_cam.get(cam.id, {})}
                 if msg:
-                    ctrls[cam.id].put(msg)
+                    send_control(cam.id, msg)
             new_throttle = throttle_sub.get()
-            if new_throttle != throttle:
+            if math.isfinite(new_throttle) and (new_throttle == -1 or .1 <= new_throttle <= 240) and new_throttle != throttle:
                 throttle = new_throttle
                 for cam in cfg.cameras:
-                    ctrls[cam.id].put({"throttle_fps": throttle})
+                    send_control(cam.id, {"throttle_fps": throttle})
             if settings.status_text != last_status:  # "unsaved changes" / "saved ..." on the web pages
                 last_status = settings.status_text
                 for cam in cfg.cameras:
-                    ctrls[cam.id].put({"_status": last_status})
+                    send_control(cam.id, {"_status": last_status})
         t_settings = time.monotonic()
 
         if now - last_health > 1.0:
@@ -287,11 +328,24 @@ def main():
             heartbeat += 1
             heartbeat_pub.set(heartbeat)
             for cam in cfg.cameras:  # restart crashed camera processes with current settings
-                if not procs[cam.id].is_alive():
-                    print(f"[{cam.name}] process died, restarting", flush=True)
+                if needs_restart(procs[cam.id].is_alive(), now, last_seen[cam.id], cam.id in reported):
+                    stat_pubs[cam.id]["connected"].set(False)
+                    stat_pubs[cam.id]["fps"].set(0)
+                    old = procs[cam.id]
+                    native_failure = needs_cpu_fallback(old.exitcode)
+                    if old.is_alive():
+                        old.terminate()
+                    old.join(timeout=.5)
+                    if old.is_alive():
+                        old.kill()
+                        old.join(timeout=.5)
+                    if cfg.detector.backend == "cuda" and native_failure:
+                        cpu_only.add(cam.id)
+                    print(f"[{cam.name}] process died or stalled; restarting"
+                          + (" on CPU" if cam.id in cpu_only else ""), flush=True)
                     restarts[cam.id] += 1
                     start(cam)
-                    ctrls[cam.id].put(initial_settings(cam.id))
+                    send_control(cam.id, initial_settings(cam.id))
             ips = ip_watcher.ips  # IP can change after boot (robot radio DHCP); refreshed in background
             # Diagnostics for the web pages: NetworkTables and every camera process.
             system = {
@@ -306,10 +360,10 @@ def main():
                 },
                 "throttle_fps": throttle,
                 "cameras": [{"name": c.name, "port": c.stream_port, "alive": procs[c.id].is_alive(),
-                             "pid": procs[c.id].pid, "restarts": restarts[c.id]} for c in cfg.cameras],
+                             "cpu_fallback": c.id in cpu_only, "pid": procs[c.id].pid, "restarts": restarts[c.id]} for c in cfg.cameras],
             }
             for cam in cfg.cameras:
-                ctrls[cam.id].put({"_system": system})
+                send_control(cam.id, {"_system": system})
             if ips != last_ips:
                 last_ips = ips
                 for (cam_id, path), pub in stream_pubs.items():

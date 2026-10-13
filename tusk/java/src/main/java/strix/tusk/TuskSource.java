@@ -40,8 +40,6 @@ public class TuskSource {
   private final OptionalDouble throttleAfterSeconds;
   private final double throttleFps;
 
-  private long lastHeartbeat = 0;
-  private double lastHeartbeatTime = Double.NEGATIVE_INFINITY;
   private Double autoStart = null;
   private double disabledSince = Timer.getTimestamp();
 
@@ -77,12 +75,9 @@ public class TuskSource {
 
   /** True if Owl has sent a heartbeat within {@code timeoutSeconds} (it beats once a second). */
   public boolean isConnected(double timeoutSeconds) {
-    long hb = heartbeat.get();
-    if (hb != lastHeartbeat) {
-      lastHeartbeat = hb;
-      lastHeartbeatTime = Timer.getTimestamp();
-    }
-    return Timer.getTimestamp() - lastHeartbeatTime < timeoutSeconds;
+    var hb = heartbeat.getAtomic();
+    double age = Timer.getTimestamp() - WpilibCompat.ntSeconds(hb.timestamp);
+    return hb.timestamp > 0 && age >= -Tusk.FUTURE_TOLERANCE_SECONDS && age < timeoutSeconds;
   }
 
   public boolean isConnected() {
@@ -123,9 +118,12 @@ public class TuskSource {
       return pending;
     }
     for (var entry : entries) {
-      double msgTime = entry.timestamp / 1e6; // NT4 already converted this to the robot's clock
+      double msgTime = WpilibCompat.ntSeconds(entry.timestamp); // NT4 already converted this to the robot's clock
       for (VisionObservation obs : entry.value) {
-        pending.add(new TimedObservation(msgTime - obs.ageSeconds(), obs));
+        double captureTime = msgTime - obs.ageSeconds();
+        if (Tusk.validObservation(obs) && Tusk.validCaptureTime(captureTime, Timer.getTimestamp())) {
+          pending.add(new TimedObservation(captureTime, obs));
+        }
       }
     }
     pending.sort(Comparator.comparingDouble(TimedObservation::captureTimeSeconds));

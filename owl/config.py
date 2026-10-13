@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass, field
 
 import numpy as np
+from validation import validate_settings, setting, number
 
 from pose_solver import DetectorSettings, SolverSettings
 
@@ -91,6 +92,10 @@ def load_calibration(path: str, width: int, height: int) -> tuple[list, list]:
     K = np.array(km, dtype=np.float64).reshape(3, 3)
     D = np.array(dc, dtype=np.float64).flatten()
 
+    if not np.isfinite(K).all() or not np.isfinite(D).all() or K[0, 0] <= 0 or K[1, 1] <= 0:
+        raise ValueError("calibration must contain finite, positive focal lengths")
+    if D.size not in (4, 5, 8, 12, 14) or not np.allclose(K[2], [0, 0, 1]):
+        raise ValueError("invalid calibration matrix or distortion coefficient count")
     res = c.get("resolution")
     if isinstance(res, dict) and "width" in res and "height" in res:
         if (int(res["width"]), int(res["height"])) != (width, height):
@@ -118,7 +123,7 @@ def find_calibration(cam: CameraConfig, width: int, height: int) -> dict | None:
             continue
         try:
             K, D = load_calibration(p, width, height)
-        except ValueError:
+        except (OSError, ValueError, TypeError):
             continue  # other resolution (or unreadable): keep looking
         with open(p) as f:
             meta = json.load(f)
@@ -154,8 +159,8 @@ def load_config(path: str) -> AppConfig:
                 id=i,
                 name=c.get("name", f"camera{i}"),
                 device=c["device"],
-                width=int(c.get("width") or DEFAULT_WIDTH),
-                height=int(c.get("height") or DEFAULT_HEIGHT),
+                width=number("width", c.get("width", DEFAULT_WIDTH), 16, 8192, integer=True),
+                height=number("height", c.get("height", DEFAULT_HEIGHT), 16, 8192, integer=True),
                 fps=c.get("fps", 30),
                 fourcc=c.get("fourcc", "MJPG"),
                 robot_to_camera=c["robot_to_camera"],
@@ -170,6 +175,32 @@ def load_config(path: str) -> AppConfig:
         )
     if len({c.name for c in cams}) != len(cams):
         raise ValueError("camera names must be unique")
+
+    validate_settings({"board_" + k: v for k, v in board.items()})
+    for key in ("quad_decimate", "min_cluster_pixels"):
+        setattr(det, key, setting(key, getattr(det, key)))
+    det.num_threads = number("num_threads", det.num_threads, 1, 256, integer=True)
+    if det.backend not in ("cpu", "cuda") or det.family not in ("tag36h11", "tag16h5"):
+        raise ValueError("unsupported detector backend or tag family")
+    for key in ("min_decision_margin", "max_single_tag_ambiguity", "max_tag_distance_m", "max_reprojection_error_px"):
+        setattr(solver, key, setting(key, getattr(solver, key)))
+    for key in ("tag_size_m", "field_border_margin_m", "max_z_error_m"):
+        number(key, getattr(solver, key), 0, 100, positive=key == "tag_size_m")
+    number("max_hamming", solver.max_hamming, 0, 3, integer=True)
+    stream["max_fps"] = setting("stream_max_fps", stream["max_fps"])
+    number("jpeg_quality", stream["jpeg_quality"], 1, 100, integer=True)
+    number("base_port", stream["base_port"], 1024, 65535 - len(cams), integer=True)
+    for cam in cams:
+        setting("std_dev_factor", cam.std_dev_factor)
+        setting("exposure", cam.exposure)
+        setting("gain", cam.gain)
+        number("fps", cam.fps, 1, 240, integer=True)
+        if not isinstance(cam.name, str) or not cam.name or any(c in cam.name for c in '/\\'):
+            raise ValueError("camera name must be nonempty and contain no path separators")
+        if len(cam.fourcc) != 4:
+            raise ValueError("fourcc must have four characters")
+        for key in ("x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"):
+            number(key, cam.robot_to_camera.get(key, 0), -10000, 10000)
 
     return AppConfig(
         team=nt.get("team"),

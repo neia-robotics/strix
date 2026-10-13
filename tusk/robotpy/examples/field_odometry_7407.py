@@ -5,7 +5,8 @@ Copy into sensors/ (with the tusk package installed or vendored). Construct it w
 BatchedVisionSource instead of the camera list:
 
     self.vision = BatchedVisionSource()
-    self.field_odometry = FieldOdometry(self.drivetrain, self.vision, self.backup_gyro)
+    self.field_odometry = FieldOdometry(self.drivetrain, self.vision, self.backup_gyro,
+                                        self.pose_estimator.sampleAt)
 
 Std devs: xy = XY coefficient * stdDevFactor, where the coprocessor computes
 stdDevFactor = avgTagDistance^2 / tagCount^2 * that camera's std_dev_factor.
@@ -30,7 +31,8 @@ import robot_constants
 from subsystems import CommandSwerveDrivetrain
 
 from tusk import BatchedVisionSource, select_pose
-from tusk import VisionObservation
+from tusk import VisionObservation, valid_observation, valid_capture_time
+from tusk import _compat as wpi
 
 
 class FieldOdometry:
@@ -46,10 +48,11 @@ class FieldOdometry:
     SINGLE_TAG_THETA_DEFAULT = 100.0  # effectively "gyro owns heading"
     SINGLE_TAG_MAX_YAW_ERR_DEFAULT = 5.0
 
-    def __init__(self, drivetrain: CommandSwerveDrivetrain, vision: BatchedVisionSource, backup_gyro: Pigeon2):
+    def __init__(self, drivetrain: CommandSwerveDrivetrain, vision: BatchedVisionSource, backup_gyro: Pigeon2, sample_at):
         self.drivetrain = drivetrain
         self.vision = vision
         self.backup_gyro = backup_gyro
+        self.sample_at = sample_at  # timestamp -> historical Pose2d or None, e.g. estimator.sampleAt
 
         self.use_vision = True
 
@@ -72,10 +75,12 @@ class FieldOdometry:
             theta = Preferences.getDouble(self.SINGLE_TAG_THETA_KEY, self.SINGLE_TAG_THETA_DEFAULT)
         else:
             theta = Preferences.getDouble(self.THETA_COEFF_KEY, self.THETA_COEFF_DEFAULT) * obs.stdDevFactor
+        if not all(math.isfinite(v) and v > 0 for v in (xy, theta, obs.stdDevFactor)):
+            raise ValueError("invalid vision confidence")
         return xy, xy, theta
 
     def add_vision_measure(self, capture_time: float, obs: VisionObservation):
-        if obs.tagCount == 0:
+        if not valid_observation(obs) or not valid_capture_time(capture_time, wpi.now()):
             return
 
         if obs.tagCount == 1 and (
@@ -88,11 +93,24 @@ class FieldOdometry:
         if DriverStation.isEnabled():
             max_yaw_err = math.radians(Preferences.getDouble(
                 self.SINGLE_TAG_MAX_YAW_ERR_KEY, self.SINGLE_TAG_MAX_YAW_ERR_DEFAULT))
-        pose = select_pose(obs, self.drivetrain.get_pose().rotation(), max_yaw_err)
+        reference = self.sample_at(capture_time)
+        if reference is None:
+            if DriverStation.isEnabled():
+                return
+            reference = self.drivetrain.get_pose()
+        if max_yaw_err is not None and (not math.isfinite(max_yaw_err) or max_yaw_err <= 0):
+            return
+        pose = select_pose(obs, reference.rotation(), max_yaw_err)
         if pose is None:
             return
 
-        self.drivetrain.add_vision_measurement(pose, capture_time, self.std_devs(obs))
+        if DriverStation.isEnabled() and pose.translation().distance(reference.translation()) > 2:
+            return
+        try:
+            deviations = self.std_devs(obs)
+        except ValueError:
+            return
+        self.drivetrain.add_vision_measurement(pose, capture_time, deviations)
 
     def update(self):
         SmartDashboard.putBoolean("Vision/Coprocessor Connected", self.vision.is_connected())

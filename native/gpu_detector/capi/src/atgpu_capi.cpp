@@ -1,7 +1,7 @@
 // Implementation of the public C API (include/apriltag_gpu_capi.h).
 //
 // This file does all argument validation, owns the handle, converts backend
-// exceptions and trapped glog fatals into status codes, and keeps the
+// recoverable exceptions into status codes, and keeps the
 // per-thread error message.  It knows nothing about CUDA; the backend does.
 #include "apriltag_gpu_capi.h"
 
@@ -13,17 +13,12 @@
 #include <string>
 
 #include "atgpu_backend.h"
-#include "atgpu_fatal_trap.h"
 
 struct atgpu_detector {
   int32_t width = 0;
   int32_t height = 0;
   atgpu_settings settings{};
   std::unique_ptr<atgpu::Backend> backend;
-  // Set after a trapped fatal error; every later call fails with
-  // ATGPU_ERROR_POISONED.
-  bool poisoned = false;
-  std::string poison_reason;
 };
 
 namespace {
@@ -35,11 +30,6 @@ thread_local std::string tls_last_error;
 int32_t Fail(int32_t status, const std::string &message) {
   tls_last_error = message;
   return status;
-}
-
-const char *FamilyNameOrUnknown(int32_t family) {
-  const char *name = atgpu::FamilyName(family);
-  return name != nullptr ? name : "unknown";
 }
 
 std::string Str(double v) {
@@ -251,7 +241,6 @@ atgpu_detector *atgpu_create(int32_t width, int32_t height,
   if (ValidateAll(width, height, settings, camera) != ATGPU_OK) {
     return nullptr;
   }
-  atgpu::FatalTrap::InstallOnce();
 
   auto handle = std::make_unique<atgpu_detector>();
   handle->width = width;
@@ -265,27 +254,15 @@ atgpu_detector *atgpu_create(int32_t width, int32_t height,
   config.has_camera_model = camera != nullptr;
   if (camera != nullptr) config.camera_model = *camera;
 
-  atgpu::FatalTrap trap;
-  if (ATGPU_FATAL_TRAP_ARMED(trap)) {
-    try {
-      handle->backend = atgpu::CreateBackend(config);
-    } catch (const std::exception &e) {
-      Fail(ATGPU_ERROR_BACKEND,
-           std::string("failed to create detector: ") + e.what());
-      return nullptr;
-    } catch (...) {
-      Fail(ATGPU_ERROR_BACKEND,
-           "failed to create detector: unknown C++ exception");
-      return nullptr;
-    }
-  } else {
-    // Came back here from a CHECK/LOG(FATAL) inside the detector.  Whatever
-    // was half-built is leaked on purpose; the process is still alive.
-    Fail(ATGPU_ERROR_FATAL_TRAPPED,
-         "fatal error inside the detector while creating it (" +
-             std::to_string(width) + "x" + std::to_string(height) +
-             ", family " + FamilyNameOrUnknown(settings->family) + "): " +
-             trap.message);
+  try {
+    handle->backend = atgpu::CreateBackend(config);
+  } catch (const std::exception &e) {
+    Fail(ATGPU_ERROR_BACKEND,
+         std::string("failed to create detector: ") + e.what());
+    return nullptr;
+  } catch (...) {
+    Fail(ATGPU_ERROR_BACKEND,
+         "failed to create detector: unknown C++ exception");
     return nullptr;
   }
 
@@ -298,11 +275,7 @@ int32_t atgpu_detect(atgpu_detector *detector, const uint8_t *image,
   if (detector == nullptr) {
     return Fail(ATGPU_ERROR_INVALID_ARGUMENT, "detector is NULL");
   }
-  if (detector->poisoned) {
-    return Fail(ATGPU_ERROR_POISONED,
-                "detector hit a fatal error earlier and must be destroyed: " +
-                    detector->poison_reason);
-  }
+
   if (image == nullptr) {
     return Fail(ATGPU_ERROR_INVALID_ARGUMENT, "image is NULL");
   }
@@ -323,28 +296,18 @@ int32_t atgpu_detect(atgpu_detector *detector, const uint8_t *image,
                     " (wrong resolution, format, or non-contiguous buffer?)");
   }
 
-  atgpu::FatalTrap trap;
-  if (ATGPU_FATAL_TRAP_ARMED(trap)) {
-    try {
-      if (format == ATGPU_FORMAT_GRAY8) {
-        detector->backend->DetectGray8(image);
-      } else {
-        detector->backend->DetectYUYV(image);
-      }
-    } catch (const std::exception &e) {
-      return Fail(ATGPU_ERROR_BACKEND,
-                  std::string("detection failed: ") + e.what());
-    } catch (...) {
-      return Fail(ATGPU_ERROR_BACKEND,
-                  "detection failed: unknown C++ exception");
+  try {
+    if (format == ATGPU_FORMAT_GRAY8) {
+      detector->backend->DetectGray8(image);
+    } else {
+      detector->backend->DetectYUYV(image);
     }
-  } else {
-    detector->poisoned = true;
-    detector->poison_reason = trap.message;
-    return Fail(ATGPU_ERROR_FATAL_TRAPPED,
-                "fatal error inside the GPU detector; the handle is now "
-                "unusable, destroy it: " +
-                    trap.message);
+  } catch (const std::exception &e) {
+    return Fail(ATGPU_ERROR_BACKEND,
+                std::string("detection failed: ") + e.what());
+  } catch (...) {
+    return Fail(ATGPU_ERROR_BACKEND,
+                "detection failed: unknown C++ exception");
   }
 
   tls_last_error.clear();
@@ -355,11 +318,7 @@ int32_t atgpu_num_detections(const atgpu_detector *detector) {
   if (detector == nullptr) {
     return Fail(ATGPU_ERROR_INVALID_ARGUMENT, "detector is NULL");
   }
-  if (detector->poisoned) {
-    return Fail(ATGPU_ERROR_POISONED,
-                "detector hit a fatal error earlier and must be destroyed: " +
-                    detector->poison_reason);
-  }
+
   return static_cast<int32_t>(detector->backend->NumDetections());
 }
 
@@ -368,11 +327,7 @@ int32_t atgpu_get_detections(const atgpu_detector *detector,
   if (detector == nullptr) {
     return Fail(ATGPU_ERROR_INVALID_ARGUMENT, "detector is NULL");
   }
-  if (detector->poisoned) {
-    return Fail(ATGPU_ERROR_POISONED,
-                "detector hit a fatal error earlier and must be destroyed: " +
-                    detector->poison_reason);
-  }
+
   if (out == nullptr && max_out > 0) {
     return Fail(ATGPU_ERROR_INVALID_ARGUMENT, "out is NULL");
   }
@@ -391,16 +346,6 @@ int32_t atgpu_get_detections(const atgpu_detector *detector,
 
 void atgpu_destroy(atgpu_detector *detector) {
   if (detector == nullptr) return;
-  if (detector->poisoned) {
-    // The backend's destructor runs CHECK_CUDA(cudaFree...) which may itself
-    // fail after a sticky CUDA error.  Trap that too so destroy never aborts.
-    atgpu::FatalTrap trap;
-    if (ATGPU_FATAL_TRAP_ARMED(trap)) {
-      detector->backend.reset();
-    } else {
-      detector->backend.release();  // leak rather than die
-    }
-  }
   delete detector;
 }
 
@@ -434,21 +379,15 @@ int32_t atgpu_device_info(char *buffer, size_t buffer_len) {
     return Fail(ATGPU_ERROR_INVALID_ARGUMENT, "buffer is NULL or empty");
   }
   buffer[0] = '\0';
-  atgpu::FatalTrap::InstallOnce();
   std::string info;
-  atgpu::FatalTrap trap;
-  if (ATGPU_FATAL_TRAP_ARMED(trap)) {
-    try {
-      info = atgpu::DescribeDevice();
-    } catch (const std::exception &e) {
-      return Fail(ATGPU_ERROR_BACKEND, std::string("no usable device: ") + e.what());
-    } catch (...) {
-      return Fail(ATGPU_ERROR_BACKEND, "no usable device: unknown C++ exception");
-    }
-  } else {
-    return Fail(ATGPU_ERROR_FATAL_TRAPPED,
-                "fatal error while querying the device: " + trap.message);
+  try {
+    info = atgpu::DescribeDevice();
+  } catch (const std::exception &e) {
+    return Fail(ATGPU_ERROR_BACKEND, std::string("no usable device: ") + e.what());
+  } catch (...) {
+    return Fail(ATGPU_ERROR_BACKEND, "no usable device: unknown C++ exception");
   }
+
   std::snprintf(buffer, buffer_len, "%s", info.c_str());
   tls_last_error.clear();
   return ATGPU_OK;

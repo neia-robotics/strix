@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 
 import cv2
 import numpy as np
@@ -38,6 +39,8 @@ from config import (CameraConfig, calibration_path, find_calibration, load_field
 from messages import PoseObservation, pose_to_tuple
 from pose_solver import DetectorSettings, PoseSolver, SolverSettings, make_detector
 import sysinfo
+from quality_recording import QualityRecorder
+from recovery import CAPTURE_TIMEOUT_S
 from stream_server import MjpegStreamServer, annotate
 
 STATS_PERIOD_S = 1.0
@@ -73,6 +76,7 @@ class LatestFrameGrabber(threading.Thread):
         self.seq = 0  # frames decoded and handed over
         self.grabbed = 0  # frames the camera delivered (decoded or not)
         self.connected = False
+        self.last_progress = time.monotonic()
         self.running = True
         # Decode at most one frame per this many seconds (0 = every frame). Set while
         # throttled: grab() still drains the driver so frames stay fresh, but skipping
@@ -127,58 +131,73 @@ class LatestFrameGrabber(threading.Thread):
         is_file = is_video_file(c.device)
         frame_period = 1.0 / c.fps if is_file else 0.0
         cap = None
-        while self.running:
-            with self._ctl_lock:
-                reopen, self._reopen = self._reopen, False
-            if reopen and cap is not None:
-                cap.release()
-                cap = None
-            if cap is None:
-                cap = self._open()
-                if cap is None:
-                    self.connected = False
-                    time.sleep(1.0)
-                    continue
-                self.connected = True
-            if not is_file:
+        try:
+            while self.running:
+                self.last_progress = time.monotonic()
                 with self._ctl_lock:
-                    dirty, (exposure, gain) = self._controls_dirty, self._controls
-                    self._controls_dirty = False
-                if dirty:
-                    apply_exposure_gain(cap, c.device, exposure, gain, self._log)
-            ok = cap.grab()
-            t = time.monotonic()  # capture time; shared clock with the publisher process
-            if ok and not is_file:
-                # Prefer the driver's timestamp of when the frame was captured (on Linux
-                # V4L2 it's CLOCK_MONOTONIC, the same clock as time.monotonic()), so a frame
-                # that waited in the buffer still gets its true capture time. Only trusted
-                # if it's plausible; otherwise keep the grab time.
-                ts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-                if 0.0 <= t - ts < 0.25:
-                    t = ts
-            if ok:
-                self.grabbed += 1
-                if not is_file and time.monotonic() - self._last_decode < self.min_decode_period:
+                    reopen, self._reopen = self._reopen, False
+                if reopen and cap is not None:
+                    cap.release()
+                    cap = None
+                if cap is None:
+                    cap = self._open()
+                    if cap is None:
+                        self.connected = False
+                        time.sleep(1.0)
+                        continue
+                    self.connected = True
+                if not is_file:
+                    with self._ctl_lock:
+                        dirty, (exposure, gain) = self._controls_dirty, self._controls
+                        self._controls_dirty = False
+                    if dirty:
+                        apply_exposure_gain(cap, c.device, exposure, gain, self._log)
+                ok = cap.grab()
+                t = time.monotonic()  # capture time; shared clock with the publisher process
+                if ok and not is_file:
+                    # Prefer the driver's timestamp of when the frame was captured (on Linux
+                    # V4L2 it's CLOCK_MONOTONIC, the same clock as time.monotonic()), so a frame
+                    # that waited in the buffer still gets its true capture time. Only trusted
+                    # if it's plausible; otherwise keep the grab time.
+                    ts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                    if 0.0 <= t - ts < 0.25:
+                        t = ts
+                if ok:
+                    self.grabbed += 1
+                    if not is_file and time.monotonic() - self._last_decode < self.min_decode_period:
+                        continue
+                    self._last_decode = time.monotonic()
+                    ok, frame = cap.retrieve()
+                if not ok:
+                    if is_file and c.loop_video:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
+                    self._log("frame grab failed, reconnecting")
+                    cap.release()
+                    cap = None
+                    self.connected = False
+                    time.sleep(0.5)
                     continue
-                self._last_decode = time.monotonic()
-                ok, frame = cap.retrieve()
-            if not ok:
-                if is_file and c.loop_video:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
-                self._log("frame grab failed, reconnecting")
+                if is_file and (frame.shape[1], frame.shape[0]) != (self.cam.width, self.cam.height):
+                    frame = cv2.resize(frame, (self.cam.width, self.cam.height))  # test videos follow resolution
+                with self.cond:
+                    self.frame, self.capture_time, self.seq = frame, t, self.seq + 1
+                    self.cond.notify()
+                if frame_period:
+                    time.sleep(frame_period)  # play test videos at real-time speed
+        except Exception as e:
+            self._log(f"capture thread failed: {e}")
+        finally:
+            self.connected = False
+            self.running = False
+            if cap is not None:
                 cap.release()
-                cap = None
-                self.connected = False
-                time.sleep(0.5)
-                continue
-            if is_file and (frame.shape[1], frame.shape[0]) != (self.cam.width, self.cam.height):
-                frame = cv2.resize(frame, (self.cam.width, self.cam.height))  # test videos follow resolution
             with self.cond:
-                self.frame, self.capture_time, self.seq = frame, t, self.seq + 1
-                self.cond.notify()
-            if frame_period:
-                time.sleep(frame_period)  # play test videos at real-time speed
+                self.cond.notify_all()
+
+    def healthy(self, now=None):
+        now = time.monotonic() if now is None else now
+        return self.connected and self.is_alive() and now - self.last_progress < 5.0
 
     def wait_for_frame(self, last_seq: int, timeout: float = 0.5):
         with self.cond:
@@ -227,7 +246,10 @@ class CameraWorker:
         self.out_queue = out_queue
         self.ctrl_queue = ctrl_queue
         self.peers = peers
+        self.web_requests = {}
+        self.web_lock = threading.Lock()
 
+        self.recorder = QualityRecorder(cam.id)
         self.solver = PoseSolver(load_field_layout(layout_name), solver_settings)
         self.det_settings = det_settings
         self.detector = make_detector(det_settings, self.log)
@@ -251,6 +273,7 @@ class CameraWorker:
 
         # Counters for the current stats period, and what the last period measured.
         self.frames = self.tagged = 0
+        self.initialized = False
         self.proc_total = 0.0
         self.last_stats = time.monotonic()
         self.grabbed_at_stats = self.encoded_at_stats = 0
@@ -347,7 +370,20 @@ class CameraWorker:
             self.calib_cmds.put(data or {})
             return
         # The main process owns settings (NT + save); it sends the result back via ctrl_queue.
-        self.out_queue.put(("set", self.cam.id, data) if kind == "set" else ("save",))
+        request_id = uuid.uuid4().hex
+        event = threading.Event()
+        reply = {}
+        with self.web_lock:
+            self.web_requests[request_id] = (event, reply)
+        try:
+            self.out_queue.put((kind, self.cam.id, data, request_id), timeout=1)
+            if not event.wait(3):
+                raise TimeoutError("settings owner did not acknowledge the request")
+            if not reply["ok"]:
+                raise ValueError(reply["status"])
+        finally:
+            with self.web_lock:
+                self.web_requests.pop(request_id, None)
 
     def board_image(self):
         return "image/png", board_png(_board_from_values(self.ui["values"]))
@@ -362,6 +398,8 @@ class CameraWorker:
                  + (f", stream at http://<this-ip>:{self.cam.stream_port}/" if self.stream else ""))
         last_seq = 0
         while True:
+            if not self.grabber.is_alive() or time.monotonic() - self.grabber.last_progress > CAPTURE_TIMEOUT_S:
+                raise RuntimeError("capture thread stopped or stalled; restarting camera process")
             self.apply_settings()
             self.handle_calib_cmds()
             self.update_throttle()
@@ -373,12 +411,20 @@ class CameraWorker:
                 continue
             frame, capture_time, last_seq = got
             self.process_frame(frame, capture_time, now)
+            self.initialized = True  # includes lazy GPU detector creation on the first frame
 
     def apply_settings(self) -> None:
         """Live settings from the main process (NT / web page edits, robot throttle)."""
         try:
             while True:
                 changes = self.ctrl_queue.get_nowait()
+                for ack in changes.pop("_acks", []):
+                    with self.web_lock:
+                        pending = self.web_requests.get(ack["id"])
+                        if pending:
+                            event, reply = pending
+                            reply.update(ack)
+                            event.set()
                 self.ui["values"] = {**self.ui["values"], **changes}
                 det_changes = {k: v for k, v in changes.items() if k in DETECTOR_KEYS}
                 if det_changes:
@@ -500,9 +546,9 @@ class CameraWorker:
         self.proc_shown = (self.proc_total / self.frames * 1000) if self.frames else 0.0
         enc = stream.encoded_count if stream else 0
         viewers = sum(ch.clients for ch in stream.channels.values()) if stream else 0
-        self.out_queue.put(("stats", self.cam.id, grabber.connected, self.fps_shown, self.proc_shown,
+        self.out_queue.put(("stats", self.cam.id, grabber.healthy(now), self.fps_shown, self.proc_shown,
                             self.tagged / dt, (enc - self.encoded_at_stats) / dt, viewers,
-                            self.last_reject))
+                            self.last_reject, self.initialized))
         self.encoded_at_stats = enc
         pose_txt = ""
         if self.last_res is not None:
@@ -510,7 +556,7 @@ class CameraWorker:
             pose_txt = (f"x={p.X():.2f} y={p.Y():.2f} th={p.rotation().Z() * 57.2958:.1f}deg, "
                         f"tags {sorted(self.last_res.tag_ids)}")
         res = self.active_res
-        self.ui["stats"] = {"connected": grabber.connected, "fps": self.fps_shown,
+        self.ui["stats"] = {"connected": grabber.healthy(now), "fps": self.fps_shown,
                             "processMs": self.proc_shown, "tagFps": self.tagged / dt,
                             "lastReject": self.last_reject, "pose": pose_txt, "cameraFps": cam_fps,
                             "resolution": f"{res[0]}x{res[1]}" if res else None,
@@ -559,6 +605,7 @@ class CameraWorker:
             self.last_reject = reject
         elif detections:
             res = self.solver.solve(detections, self.K, self.D, self.r2c, self.std_dev_factor)
+            self.recorder.record(detections, self.solver, res, capture_time, self.K, self.D, self.r2c)
             reject = None if res else self.solver.last_reject
         else:
             reject = None

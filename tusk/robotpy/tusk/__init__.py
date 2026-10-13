@@ -8,7 +8,7 @@ estimator. The Java version in tusk/java has the same classes under the same nam
     vision.update(pose_estimator)   # every loop
 """
 
-from .batched_vision import BatchedVision, BatchedVisionSource, select_pose
+from .batched_vision import BatchedVision, BatchedVisionSource, select_pose, valid_observation, valid_capture_time
 from .vision_types import VisionObservation, tag_ids_from_mask
 
 # Same names as the Java classes (strix.tusk.TuskSource / TuskVision).
@@ -22,5 +22,7 @@ __all__ = [
     "TuskVision",
     "VisionObservation",
     "select_pose",
+    "valid_observation",
+    "valid_capture_time",
     "tag_ids_from_mask",
 ]

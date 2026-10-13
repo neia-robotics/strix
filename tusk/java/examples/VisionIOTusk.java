@@ -5,7 +5,7 @@
 // One VisionIOTusk covers every Owl camera (Owl batches them into one NT topic):
 //
 //   vision = new Vision(drive::addVisionMeasurement,
-//                       new VisionIOTusk(new TuskSource(), drive::getRotation));
+//                       new VisionIOTusk(new TuskSource(), drive::samplePoseAt, drive::getPose));
 //
 // Add TUSK to VisionIO.PoseObservationType. Imports below are WPILib 2026; for 2027 apply
 // the renames in tusk/java/wpilib-2026-imports.txt in reverse (edu.wpi.first -> org.wpilib).
@@ -13,26 +13,31 @@
 package org.neiacademy.robotics.frc2026.subsystems.vision;
 
 import edu.wpi.first.math.geometry.Pose3d;
-import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Pose2d;
+import java.util.Optional;
+import java.util.OptionalDouble;
+import java.util.function.DoubleFunction;
+import java.util.function.Supplier;
+import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.Timer;
+import strix.tusk.Tusk;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.function.Supplier;
 import strix.tusk.TuskSource;
 import strix.tusk.VisionObservation;
 
 public class VisionIOTusk implements VisionIO {
   private final TuskSource source;
-  private final Supplier<Rotation2d> heading;
+  private final DoubleFunction<Optional<Pose2d>> sampleAt;
+  private final Supplier<Pose2d> currentPose;
 
-  /**
-   * @param heading the robot's current heading (gyro or pose estimate), used to pick between
-   *     the two candidate poses of a single-tag observation
-   */
-  public VisionIOTusk(TuskSource source, Supplier<Rotation2d> heading) {
+  /** sampleAt is the pose estimator's capture-time lookup (timestamp in seconds). */
+  public VisionIOTusk(TuskSource source, DoubleFunction<Optional<Pose2d>> sampleAt, Supplier<Pose2d> currentPose) {
     this.source = source;
-    this.heading = heading;
+    this.sampleAt = sampleAt;
+    this.currentPose = currentPose;
   }
 
   @Override
@@ -43,11 +48,15 @@ public class VisionIOTusk implements VisionIO {
     Set<Integer> tagIds = new LinkedHashSet<>();
     for (var timed : source.poll()) {
       VisionObservation obs = timed.observation();
+      var chosen = Tusk.selectTimedPose(obs, timed.captureTimeSeconds(), Timer.getTimestamp(),
+          sampleAt, currentPose.get(), DriverStation.isEnabled(),
+          OptionalDouble.of(2), OptionalDouble.of(Math.toRadians(5)), OptionalDouble.of(2));
+      if (chosen.isEmpty()) continue;
       tagIds.addAll(obs.tagIds());
       poses.add(
           new PoseObservation(
               timed.captureTimeSeconds(),
-              pickPose(obs),
+              chosen.get().equals(obs.robotPose().toPose2d()) ? obs.robotPose() : obs.altRobotPose(),
               obs.ambiguity(),
               obs.tagCount(),
               obs.avgTagDistance(),
@@ -57,14 +66,4 @@ public class VisionIOTusk implements VisionIO {
     inputs.tagIds = tagIds.stream().mapToInt(Integer::intValue).toArray();
   }
 
-  /** Multi-tag: robotPose. Single tag: the candidate whose heading matches the robot's. */
-  private Pose3d pickPose(VisionObservation obs) {
-    if (obs.tagCount() != 1) {
-      return obs.robotPose();
-    }
-    Rotation2d h = heading.get();
-    double errBest = Math.abs(obs.robotPose().toPose2d().getRotation().minus(h).getRadians());
-    double errAlt = Math.abs(obs.altRobotPose().toPose2d().getRotation().minus(h).getRadians());
-    return errBest <= errAlt ? obs.robotPose() : obs.altRobotPose();
-  }
 }

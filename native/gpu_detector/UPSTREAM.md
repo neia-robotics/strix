@@ -25,3 +25,10 @@ Licenses: the 971 code is Apache-2.0
 `detector/labeling_allegretti_2019_BKE.cu` started from YACCLAB (BSD-style, see its
 header). The AprilTag library (BSD-2-Clause) and NVIDIA CCCL (Apache-2.0 with LLVM
 exception) are downloaded at build time, not stored here. See `../../NOTICE.md`.
+
+## 2026-10-13 C API recovery change
+
+Removed C API glog fatal trapping with siglongjmp. Fatal failures terminate the
+isolated worker; after a native crash signal, Owl's supervisor restarts that camera on CPU for the remainder
+of the supervisor lifetime. The vendored detector is unchanged. CPU tests exercise
+fatal termination in a child process. Legacy status numbers remain reserved.

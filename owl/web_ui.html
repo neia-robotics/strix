@@ -551,6 +551,7 @@
     </div>
   </section>
 </main>
+<script src="/web_helpers.js"></script>
 <script>
 // Settings shown in the panel. Keys match settings.py (GLOBAL_SETTINGS / CAMERA_SETTINGS).
 // "auto" settings use null for auto; exposure/gain ranges are replaced by the camera's own.
@@ -573,6 +574,7 @@ const SPEC = [
     { k: "min_decision_margin", label: "min decision margin", min: 0, max: 100, step: 1,
       hint: "raise it if phantom tags appear, lower it if good far tags are dropped." },
     { k: "max_single_tag_ambiguity", label: "max single-tag ambiguity", min: 0, max: 1, step: 0.01 },
+    { k: "max_reprojection_error_px", label: "max corner RMS error (px)", min: 0.1, max: 20, step: 0.1 },
     { k: "max_tag_distance_m", label: "max tag distance (m)", min: 0.5, max: 10, step: 0.1 },
   ]},
   { tab: "output", group: "pose", note: "this camera only", items: [
@@ -730,17 +732,10 @@ const clamp = (it, v) => Math.min(it.max, Math.max(it.min, v));
 const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 const aspect = (w, h) => { const g = gcd(w, h); return `${w / g}:${h / g}`; };
 
-const pending = {};
-let sendTimer = null;
+const edits = createSettingsQueue(fetch, (e) => { $("status").textContent = e.message; });
 function send(k, v) {
-  pending[k] = v;
   lastSent[k] = Date.now();
-  clearTimeout(sendTimer);
-  sendTimer = setTimeout(() => {
-    const body = JSON.stringify(pending);
-    for (const key in pending) delete pending[key];
-    fetch(api("/api/set"), { method: "POST", body }).catch(() => {});
-  }, 80);
+  edits.set(api("/api/set"), k, v);
 }
 const calib = (op, extra = {}) =>
   fetch(api("/api/calib"), { method: "POST", body: JSON.stringify({ op, ...extra }) }).then(poll).catch(() => {});
@@ -1057,31 +1052,64 @@ async function pollSystem() {
   $("sys-load").textContent = s.load ? s.load.map((x) => x.toFixed(2)).join(", ") + ` on ${s.cpu_count} cores` : "–";
   $("sys-gpu-row").hidden = s.gpu === null || s.gpu === undefined;
   if (s.gpu !== null && s.gpu !== undefined) $("sys-gpu").textContent = `${Math.round(s.gpu)}%`;
-  $("sys-temps").innerHTML = (s.temps || []).map((t) => `<div class="kv"><span>${t.name}</span>
-      <span class="${t.c >= 85 ? "bad-text" : t.c >= 70 ? "warn-text" : ""}">${t.c.toFixed(1)} °C</span></div>`).join("");
+  $("sys-temps").replaceChildren();
+  for (const t of s.temps || []) {
+    const row = document.createElement("div"); row.className = "kv";
+    const name = document.createElement("span"), value = document.createElement("span");
+    name.textContent = t.name; value.textContent = `${t.c.toFixed(1)} °C`;
+    value.className = t.c >= 85 ? "bad-text" : t.c >= 70 ? "warn-text" : "";
+    row.append(name, value); $("sys-temps").append(row);
+  }
   if (s.memory) { $("sys-mem").textContent = `${gb(s.memory.used)} of ${gb(s.memory.total)}`; meter("sys-mem-bar", s.memory.used / s.memory.total); }
   else $("sys-mem").textContent = "–";
   $("sys-disk").textContent = `${gb(s.disk.used)} of ${gb(s.disk.total)}`;
   meter("sys-disk-bar", s.disk.used / s.disk.total, 0.85, 0.95);
   $("nt-mode").textContent = nt.mode || "–";
   $("nt-target").textContent = nt.target || (nt.mode ? "this coprocessor is the server" : "–");
-  $("nt-conn").innerHTML = nt.mode ? yes(nt.connected) + ((nt.peers || []).length
-    ? ` <span class="hint">(${nt.peers.map((p) => p.id || p.ip).join(", ")})</span>` : "") : "–";
+  $("nt-conn").replaceChildren();
+  const connection = document.createElement("span");
+  connection.className = nt.mode ? (nt.connected ? "ok-text" : "bad-text") : "";
+  connection.textContent = nt.mode ? (nt.connected ? "connected" : "disconnected") : "–";
+  $("nt-conn").append(connection);
+  if ((nt.peers || []).length) {
+    const peers = document.createElement("span"); peers.className = "hint";
+    peers.textContent = ` (${nt.peers.map((p) => p.id || p.ip).join(", ")})`;
+    $("nt-conn").append(peers);
+  }
   $("nt-sync").innerHTML = nt.mode ? yes(nt.time_synced) : "–";
   $("nt-throttle").textContent = owl.throttle_fps > 0 ? `${owl.throttle_fps} fps (robot disabled)` : "off";
   const procs = owl.cameras || [];
   const states = await Promise.all(procs.map((c) => fetch(originFor(c.port) + "/api/state", { cache: "no-store" })
     .then((r) => r.json()).catch(() => null)));
-  $("sys-cams").innerHTML = procs.map((c, i) => {
+  $("sys-cams").replaceChildren();
+  procs.forEach((c, i) => {
     const st = states[i] || {}, t = st.stats || {};
-    return `<tr><td><b>${c.name}</b></td><td>${c.port}</td><td>${yes(c.alive, `running (pid ${c.pid})`, "stopped")}</td>
-      <td class="${c.restarts ? "warn-text" : ""}">${c.restarts}</td><td>${st.detector || "–"}</td>
-      <td>${fmt(t.fps, 0)}</td><td>${fmt(t.processMs, 1)}</td>
-      <td>${st.calib_info ? yes(true, "calibrated") : yes(false, "", "not calibrated")}</td></tr>`;
-  }).join("") || `<tr><td colspan="8" class="hint">waiting for the main process…</td></tr>`;
+    const row = document.createElement("tr");
+    for (const [index, value] of [c.name, c.port, c.alive ? `running (pid ${c.pid})` : "stopped",
+        c.restarts, c.cpu_fallback ? "CPU fallback after native failure" : st.detector || "–", fmt(t.fps, 0), fmt(t.processMs, 1),
+        st.calib_info ? "calibrated" : "not calibrated"].entries()) {
+      const cell = document.createElement("td");
+      const text = document.createElement("span"); text.textContent = value;
+      if (index === 2) text.className = `badge ${c.alive ? "good" : "bad"}`;
+      if (index === 3 && c.restarts || index === 4 && c.cpu_fallback) text.className = "warn-text";
+      if (index === 7) text.className = `badge ${st.calib_info ? "good" : "bad"}`;
+      cell.append(text); row.append(cell);
+    }
+    $("sys-cams").append(row);
+  });
+  if (!procs.length) {
+    const row = document.createElement("tr"), cell = document.createElement("td");
+    cell.colSpan = 8; cell.className = "hint"; cell.textContent = "waiting for the main process…";
+    row.append(cell); $("sys-cams").append(row);
+  }
   const v = s.versions || {};
-  $("sys-versions").innerHTML = Object.entries(v).filter(([, x]) => x)
-    .map(([k, x]) => `<div class="kv"><span>${k}</span><span>${x}</span></div>`).join("");
+  $("sys-versions").replaceChildren();
+  for (const [k, x] of Object.entries(v).filter(([, x]) => x)) {
+    const row = document.createElement("div"); row.className = "kv";
+    const name = document.createElement("span"), value = document.createElement("span");
+    name.textContent = k; value.textContent = x; row.append(name, value);
+    $("sys-versions").append(row);
+  }
 }
 
 // ---- cameras page: one tile per camera, each polling its own port ----
@@ -1099,7 +1127,7 @@ function buildTiles(list) {
     const el = document.createElement("article");
     el.className = "tile";
     el.innerHTML = `
-      <img class="shot" alt="${c.name} stream">
+      <img class="shot" alt="Camera stream">
       <div class="body">
         <div class="head"><span class="dot"></span><b></b><span class="badge">–</span></div>
         <div class="nums">
@@ -1114,6 +1142,7 @@ function buildTiles(list) {
         </div>
       </div>`;
     el.querySelector(".head b").textContent = c.name;
+    el.querySelector(".shot").alt = `${c.name} stream`;
     el.querySelectorAll("[data-go]").forEach((b) => b.onclick = () => {
       if (String($("camsel").value) !== String(c.port)) switchCamera(c.port);
       showPage(b.dataset.go);
@@ -1165,7 +1194,7 @@ document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => selec
 
 $("save").onclick = async () => {
   $("save").disabled = true;
-  try { await fetch(api("/api/save"), { method: "POST", body: "{}" }); } catch (e) {}
+  try { await edits.save(api("/api/save")); } catch (e) { $("status").textContent = e.message; }
   setTimeout(() => { $("save").disabled = false; }, 600);
 };
 
