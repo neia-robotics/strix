@@ -27,10 +27,21 @@ produce duplicate-symbol clashes.  `test/check_exports.sh` verifies this.
 
 ## Status
 
-The library has run on an NVIDIA GPU (Tesla T4, x86) but not yet on a Jetson.
-What has been verified:
+The library has passed every check on two NVIDIA GPUs, x86 and ARM64, with the current
+C API (version 2). It hasn't run on a Jetson yet. What has been verified:
 
-* **On a GPU** (Google Colab, Tesla T4 / sm_75, Ubuntu 24.04, CUDA 13.0, driver
+* **ARM64 with a GPU** (AWS EC2 `g5g.xlarge`: Graviton2 with an NVIDIA T4G / sm_75,
+  Ubuntu 22.04, CUDA 13.2, driver 595, Python 3.11, C API version 2, October 2026):
+  every check in `tools/validate_gpu.sh` passed. Detections, corner accuracy (within
+  0.013 px of WPILib), error paths, the ctypes smoke tests and Owl's GPU-vs-CPU
+  comparison (277 shared tags, corner difference median 0.001 px, max 0.154 px) match
+  the x86 run below. Four 1280x800 detectors and two 1600x1296 detectors ran together
+  without errors; GPU memory peaked at 1243 MiB. This is the closest stand-in for a
+  Jetson so far: an ARM host, Ubuntu 22.04 and the pinned ARM64 Python wheels.
+* **x86 with a GPU, C API version 2** (Google Colab, Tesla T4, Ubuntu 24.04, CUDA 13.0,
+  driver 580, October 2026): every check passed again after the fatal-error trap was
+  removed, with the same accuracy as the first run.
+* **First GPU run, C API version 1** (Google Colab, Tesla T4 / sm_75, Ubuntu 24.04, CUDA 13.0, driver
   580, built for sm_75 and sm_87 with `tools/validate_gpu.sh`, October 2026): every
   check passed. `atgpu_capi_test` finds tag 554, nothing, and tag 585 with corners
   within 0.013 px of WPILib's detector and decision margins within 0.03; the GRAY8 and
@@ -53,9 +64,9 @@ What has been verified:
   isolated subprocess terminates on a simulated CHECK failure.
 * The CMake logic for offline dependency resolution and for downloading.
 
-Still untested: an ARM host with a GPU, CUDA 12 on Ubuntu 22.04 at runtime (JetPack 6's
-combination), the Jetson's shared CPU/GPU memory, and the Jetson instructions below.
-See "First checks on the Jetson".
+Still untested: a Jetson. That means the Orin's GPU (sm_87 has only been compiled, never
+run), JetPack 6's CUDA 12 at runtime, the Jetson's shared CPU/GPU memory, and the Jetson
+instructions below. See "First checks on the Jetson".
 
 ## API in one screen
 

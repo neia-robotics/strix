@@ -63,7 +63,7 @@ On macOS, the integration test uses SIGKILL instead of deliberately aborting Pyt
 and the native test skips its deliberate child abort, to avoid Crash Reporter dialogs.
 Linux CI retains both abort checks; CPU-fallback policy remains unit-tested on macOS.
 
-Physical camera unplug/replug, Jetson CUDA execution, real field recordings, roboRIO/Systemcore deployment and a rendered-browser/accessibility pass remain hardware/manual follow-ups. Existing example adapters depend on external team code and are not compiled as standalone projects.
+Physical camera unplug/replug, Jetson CUDA execution (x86 and ARM64 GPUs have passed), real field recordings, roboRIO/Systemcore deployment and a rendered-browser/accessibility pass remain hardware/manual follow-ups. Existing example adapters depend on external team code and are not compiled as standalone projects.
 
 The native C API is now version 2 because fatal-error recovery semantics changed.
 Rebuild the optional GPU library with this checkout. Owl rejects older version-1
@@ -86,6 +86,7 @@ field recordings yet. Collect close-range views with measured tag-placement erro
 and review acceptance rates before changing the limit. Robust per-tag removal is a
 separate solver change and needs tests for wrong consensus, not just lower residuals.
 
-API-v2 CUDA execution is still pending. The local host has no NVIDIA GPU, and no
-connected Colab runtime was available. The previous API-v1 GPU result does not
-validate API-v2 recovery. Rebuild and rerun the GPU notebook on the changed checkout.
+API-v2 CUDA execution has since been validated. `tools/validate_gpu.sh` passed every
+check on commit `469b5b8` on a Colab T4 (x86, Ubuntu 24.04, CUDA 13.0) and on an AWS
+`g5g.xlarge` (ARM64 T4G, Ubuntu 22.04, CUDA 13.2, Python 3.11). Both builds reported C API
+version 2. A Jetson run is the remaining hardware check.

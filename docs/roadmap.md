@@ -11,7 +11,7 @@
 
 ## Next
 
-1. First run on a Jetson: `bash tools/validate_gpu.sh`, then the Jetson checklist in `native/gpu_detector/capi/README.md`. (The same script passed on a Colab T4; see the status in that README. An ARM GPU VM, EC2 `g5g.xlarge`, is the closer stand-in while waiting.)
+1. First run on a Jetson: `bash tools/validate_gpu.sh`, then the Jetson checklist in `native/gpu_detector/capi/README.md`. (The same script has passed on a Colab T4 and on an ARM64 EC2 `g5g.xlarge`; see the status in that README. A Jetson is the only platform left.)
 2. Jetson benchmarks with the same cameras, comparing fps and `processMs` per camera between the CPU and `cuda` backends. Write results to `docs/benchmarks.md`.
 3. Orange Pi regression run: Choate's two OV2311s on the restructured code.
 4. Raw gray capture for USB3 global-shutter cameras: skip MJPEG and the color conversion, and hand gray frames straight to the detector.
