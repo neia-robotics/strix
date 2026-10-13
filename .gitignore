@@ -31,3 +31,6 @@ v4l-debs/
 
 # Saved values of Owl's standalone NT server (runtime state)
 networktables.json*
+
+# tools/validate_gpu.sh output
+gpu-validation/
