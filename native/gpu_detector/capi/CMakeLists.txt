@@ -293,6 +293,16 @@ if(ATGPU_BUILD_TESTS)
                    $<TARGET_FILE:apriltag_gpu_capi>)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
+    # The smoke test reads the JPEG test images with OpenCV and needs numpy.
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy, cv2"
+                    RESULT_VARIABLE ATGPU_PY_DEPS_RESULT OUTPUT_QUIET ERROR_QUIET)
+    if(NOT ATGPU_PY_DEPS_RESULT EQUAL 0)
+      message(STATUS "Skipping atgpu_ctypes_smoke: ${Python3_EXECUTABLE} lacks numpy or cv2 "
+                     "(pass -DPython3_EXECUTABLE=<a python with both> to run it)")
+      set(Python3_Interpreter_FOUND FALSE)
+    endif()
+  endif()
+  if(Python3_Interpreter_FOUND)
     add_test(NAME atgpu_ctypes_smoke
              COMMAND ${Python3_EXECUTABLE}
                      "${CMAKE_CURRENT_SOURCE_DIR}/test/smoke_ctypes.py"
