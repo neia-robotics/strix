@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strix-tusk"
+version = "0.1.0"
+description = "Tusk: robot-side reader for the Strix (Owl) AprilTag vision coprocessor"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = ["robotpy-wpimath", "robotpy-wpiutil", "pyntcore", "wpilib"]
+
+[tool.setuptools]
+packages = ["tusk"]

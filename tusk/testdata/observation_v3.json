@@ -1,0 +1,33 @@
+{
+  "typeName": "VisionObservationV3",
+  "schema": "int32 cameraId; Pose3d robotPose; Pose3d altRobotPose; double ageSeconds; double stdDevFactor; int32 tagCount; double avgTagDistance; double ambiguity; int64 tagMask",
+  "size": 160,
+  "hex": "01000000000000000000f03f000000000000004000000000000008403c85ac0e9577ef3f10d9f62df18ba13fc532b7032924bb3faeda2db29260c23f00000000000010400000000000001440000000000000d03f1f2155c6fe69e73f000000000000000000000000000000000e8fbf16fccfe5bf9a9999999999a93f666666666666e63f020000000000000000000c4000000000000000002004000000000000",
+  "fields": {
+    "cameraId": 1,
+    "robotPose": {
+      "x": 1.0,
+      "y": 2.0,
+      "z": 3.0,
+      "qw": 0.9833474432563558,
+      "qx": 0.034270798550482096,
+      "qy": 0.10602051106179562,
+      "qz": 0.1435721750273919
+    },
+    "altRobotPose": {
+      "x": 4.0,
+      "y": 5.0,
+      "z": 0.25,
+      "qw": 0.7316888688738209,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": -0.6816387600233342
+    },
+    "ageSeconds": 0.05,
+    "stdDevFactor": 0.7,
+    "tagCount": 2,
+    "avgTagDistance": 3.5,
+    "ambiguity": 0.0,
+    "tagMask": 1056
+  }
+}

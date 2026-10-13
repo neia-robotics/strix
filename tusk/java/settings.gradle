@@ -1,0 +1,6 @@
+plugins {
+    // Downloads the JDK each WPILib season needs (17 for 2026, 25 for 2027).
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'strix-tusk'

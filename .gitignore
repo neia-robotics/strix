@@ -1,0 +1,33 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Java / Gradle
+tusk/java/build/
+tusk/java/.gradle/
+.idea/
+*.iml
+
+# Native GPU detector
+native/gpu_detector/build*/
+native/gpu_detector/capi/deps/
+
+# Owl: per-coprocessor files
+owl/config.json
+owl/wheels/
+owl/calibrations/
+owl/camera_*.jpg
+v4l-debs/
+
+# Temp files from Owl's atomic config/calibration writes (left behind only if a write is interrupted)
+.config-*.json
+.calib-*.json
+
+# Saved values of Owl's standalone NT server (runtime state)
+networktables.json*

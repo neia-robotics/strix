@@ -1,0 +1,11 @@
+/* GNU ld version script: export only the C API.  Everything else (the
+ * AprilTag C library compiled into this object, the detector internals,
+ * static CUDA runtime, glog/gflags flag registrations) stays local so it can
+ * never collide with other copies loaded into the same process, e.g. the
+ * AprilTag library shipped with robotpy_apriltag. */
+{
+  global:
+    atgpu_*;
+  local:
+    *;
+};

@@ -1,0 +1,9 @@
+# Owl runs on RobotPy 2026 libraries, even when the robot runs WPILib 2027:
+# RobotPy 2027's Linux ARM wheels need Ubuntu 24.04 (glibc 2.39), and NT4 between
+# a 2026 Owl and a 2027 robot is checked by tests/interop_nt.py. See docs/wpilib-2027.md.
+robotpy-apriltag>=2026.2,<2027
+pyntcore>=2026.2,<2027
+robotpy-wpimath>=2026.2,<2027
+robotpy-wpiutil>=2026.2,<2027
+opencv-python-headless
+numpy

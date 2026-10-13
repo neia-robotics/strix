@@ -1,0 +1,20 @@
+# Starts Owl (the Strix vision coprocessor app) on boot and restarts it if it exits.
+#   sudo cp deploy/owl.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now owl
+#   journalctl -u owl -f        # view logs
+[Unit]
+Description=Strix Owl: multi-camera AprilTag vision
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Change the user and the two paths to match where Owl lives on this coprocessor.
+# ExecStart must be the venv's python by full path (systemd ignores your shell's PATH).
+User=strix
+WorkingDirectory=/home/strix/strix/owl
+ExecStart=/home/strix/strix/owl/venv/bin/python -u main.py --config config.json
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

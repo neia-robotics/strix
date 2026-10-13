@@ -1,0 +1,12 @@
+# Import rewrites that turn the canonical WPILib 2027 sources (src/main/java) into
+# WPILib 2026 sources. Applied by build.gradle when -PwpilibYear=2026.
+# One "2027 prefix -> 2026 prefix" per line; longest prefixes first.
+org.wpilib.math.linalg.VecBuilder -> edu.wpi.first.math.VecBuilder
+org.wpilib.math.linalg.Matrix -> edu.wpi.first.math.Matrix
+org.wpilib.math.geometry. -> edu.wpi.first.math.geometry.
+org.wpilib.math.numbers. -> edu.wpi.first.math.numbers.
+org.wpilib.networktables. -> edu.wpi.first.networktables.
+org.wpilib.util.struct. -> edu.wpi.first.util.struct.
+org.wpilib.util.Preferences -> edu.wpi.first.wpilibj.Preferences
+org.wpilib.system.Timer -> edu.wpi.first.wpilibj.Timer
+org.wpilib.driverstation.RobotState -> edu.wpi.first.wpilibj.RobotState

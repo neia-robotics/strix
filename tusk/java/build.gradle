@@ -1,0 +1,100 @@
+// Tusk (Java): one source tree, built for two WPILib seasons.
+//
+// src/main/java and src/test/java are written against WPILib 2027 (org.wpilib.*).
+// For 2026 the build copies them with the import rewrites in wpilib-2026-imports.txt
+// (edu.wpi.first.*). The few calls that differ by more than a package name live in
+// src/compat2026 and src/compat2027.
+//
+//   ./gradlew build                     2027 jar + tests (JDK 25)
+//   ./gradlew build -PwpilibYear=2026   2026 jar + tests (JDK 17)
+//   ./gradlew exportSources [-PwpilibYear=2026]   plain .java files to copy into a robot project
+
+plugins {
+    id 'java-library'
+}
+
+def year = (project.findProperty('wpilibYear') ?: '2027').toString()
+if (!(year in ['2026', '2027'])) {
+    throw new GradleException("wpilibYear must be 2026 or 2027, got ${year}")
+}
+def is2027 = year == '2027'
+def wpilibVersion = is2027 ? wpilib2027Version : wpilib2026Version
+def wpilibGroup = is2027 ? 'org.wpilib' : 'edu.wpi.first'
+
+group = 'strix'
+version = "${tuskVersion}-wpilib${year}"
+base.archivesName = "strix-tusk-${year}"
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(is2027 ? 25 : 17)
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url = is2027 ? 'https://frcmaven.wpi.edu/artifactory/release-2027' : 'https://frcmaven.wpi.edu/artifactory/release' }
+}
+
+dependencies {
+    // Provided by the robot project at runtime.
+    def wpi = { String lib -> "${wpilibGroup}.${lib}:${lib}-java:${wpilibVersion}" }
+    ['wpiutil', 'wpimath', 'wpiunits', 'ntcore', 'wpilibj', 'hal'].each { lib ->
+        compileOnly wpi(lib)
+        testImplementation wpi(lib)
+    }
+    // Third-party libraries WPILib jars use but don't declare (GradleRIO adds them on robots).
+    testImplementation 'us.hebi.quickbuf:quickbuf-runtime:1.4'
+    testImplementation 'org.ejml:ejml-simple:0.44.0'
+    testImplementation 'com.fasterxml.jackson.core:jackson-databind:2.19.2'
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// ---- 2026: generate sources from the canonical 2027 ones ----
+def rewrites = file('wpilib-2026-imports.txt').readLines()
+    .findAll { it.trim() && !it.startsWith('#') }
+    .collect { line -> def (from, to) = line.split('->')*.trim(); [from, to] }
+
+def rewriteTo2026 = { String line ->
+    if (!line.startsWith('import ')) return line
+    for (r in rewrites) {
+        if (line.contains(r[0])) return line.replace(r[0], r[1])
+    }
+    if (line.contains('org.wpilib.')) {
+        throw new GradleException("No 2026 mapping for: ${line.trim()} (add it to wpilib-2026-imports.txt)")
+    }
+    return line
+}
+
+def gen2026 = layout.buildDirectory.dir('generated/wpilib2026')
+tasks.register('generate2026Sources', Sync) {
+    from('src/main/java') { into 'main' }
+    from('src/test/java') { into 'test' }
+    filter { String line -> rewriteTo2026(line) }
+    into gen2026
+}
+
+sourceSets {
+    main.java.srcDirs = is2027 ? ['src/main/java', 'src/compat2027/java'] : [gen2026.get().dir('main'), 'src/compat2026/java']
+    test.java.srcDirs = is2027 ? ['src/test/java'] : [gen2026.get().dir('test')]
+}
+
+if (!is2027) {
+    tasks.named('compileJava') { dependsOn 'generate2026Sources' }
+    tasks.named('compileTestJava') { dependsOn 'generate2026Sources' }
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    // Tests read the shared fixture in ../testdata.
+    workingDir = projectDir
+}
+
+// Plain sources for teams that copy Tusk into their robot project instead of using the jar.
+tasks.register('exportSources', Sync) {
+    if (!is2027) dependsOn 'generate2026Sources'
+    from(sourceSets.main.java.srcDirs)
+    into layout.buildDirectory.dir("export/tusk-src-${year}")
+}

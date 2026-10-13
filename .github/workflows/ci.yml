@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  owl:
+    name: Owl (coprocessor, RobotPy 2026)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r owl/requirements.txt
+      - name: Synthetic pose test
+        working-directory: owl
+        run: python test_synthetic.py
+
+  tusk-robotpy:
+    name: Tusk RobotPy (${{ matrix.season }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        season: ["2026", "2027"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install RobotPy ${{ matrix.season }}
+        run: |
+          if [ "${{ matrix.season }}" = "2026" ]; then
+            pip install "wpilib>=2026.2,<2027" "robotpy-wpimath>=2026.2,<2027" "robotpy-wpiutil>=2026.2,<2027" "pyntcore>=2026.2,<2027" pytest
+          else
+            pip install --pre "wpilib>=2027.0.0a1,<2028" "robotpy-wpimath>=2027.0.0a1,<2028" "robotpy-wpiutil>=2027.0.0a1,<2028" "pyntcore>=2027.0.0a1,<2028" pytest
+          fi
+      - run: python -m pytest -q tusk/robotpy/tests
+
+  tusk-java:
+    name: Tusk Java (WPILib ${{ matrix.season }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        season: ["2026", "2027"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"  # runs Gradle; the build downloads JDK 17 or 25 as needed
+      - name: Build and test
+        working-directory: tusk/java
+        run: ./gradlew build exportSources -PwpilibYear=${{ matrix.season }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strix-tusk-${{ matrix.season }}
+          path: |
+            tusk/java/build/libs/*.jar
+            tusk/java/build/export/
+
+  interop:
+    name: NT interop (Owl ${{ matrix.owl }} -> robot ${{ matrix.robot }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { owl: "2026", robot: "2027" }
+          - { owl: "2026", robot: "2026" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Two RobotPy environments
+        run: |
+          for season in ${{ matrix.owl }} ${{ matrix.robot }}; do
+            [ -d venv$season ] && continue
+            python -m venv venv$season
+            if [ "$season" = "2026" ]; then
+              venv$season/bin/pip install "wpilib>=2026.2,<2027" "robotpy-wpimath>=2026.2,<2027" "robotpy-wpiutil>=2026.2,<2027" "pyntcore>=2026.2,<2027"
+            else
+              venv$season/bin/pip install --pre "wpilib>=2027.0.0a1,<2028" "robotpy-wpimath>=2027.0.0a1,<2028" "robotpy-wpiutil>=2027.0.0a1,<2028" "pyntcore>=2027.0.0a1,<2028"
+            fi
+          done
+      - name: Owl publishes, Tusk receives
+        run: |
+          venv${{ matrix.robot }}/bin/python tests/interop_nt.py robot & robot=$!
+          sleep 2
+          venv${{ matrix.owl }}/bin/python tests/interop_nt.py owl &
+          wait $robot
+
+  gpu-detector-cpu:
+    name: GPU detector C API (CPU backend)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y cmake libgoogle-glog-dev libgflags-dev python3-numpy python3-opencv
+      - name: Build and test
+        working-directory: native/gpu_detector
+        run: |
+          cmake -S capi -B build-cpu -DATGPU_BACKEND=cpu -DPython3_EXECUTABLE=/usr/bin/python3
+          cmake --build build-cpu -j"$(nproc)"
+          ctest --test-dir build-cpu --output-on-failure
+
+  gpu-detector-cuda-compile:
+    name: GPU detector C API (CUDA compile only, sm_87)
+    runs-on: ubuntu-24.04
+    container: nvidia/cuda:12.6.3-devel-ubuntu22.04
+    # The CUDA build has never been compiled; keep this informational until it's green.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y cmake curl libgoogle-glog-dev libgflags-dev python3
+      - name: Compile (no GPU needed)
+        working-directory: native/gpu_detector
+        run: |
+          cmake -S capi -B build-cuda -DCMAKE_CUDA_ARCHITECTURES=87 -DATGPU_BUILD_TESTS=OFF
+          cmake --build build-cuda -j"$(nproc)"
+          bash capi/test/check_exports.sh build-cuda/libapriltag_gpu_capi.so

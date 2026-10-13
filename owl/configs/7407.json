@@ -1,0 +1,82 @@
+{
+  "nt": {
+    "team": 7407,
+    "server": null,
+    "client_name": "opi-vision",
+    "standalone": false
+  },
+  "topic": "/Vision/observations",
+  "field": {
+    "layout": "k2026RebuiltWelded",
+    "tag_size_m": 0.1651
+  },
+  "detector": {
+    "family": "tag36h11",
+    "quad_decimate": 2.0,
+    "num_threads": 2,
+    "refine_edges": true,
+    "min_cluster_pixels": 20
+  },
+  "filters": {
+    "max_hamming": 0,
+    "min_decision_margin": 25.0,
+    "max_single_tag_ambiguity": 0.4,
+    "max_tag_distance_m": 6.0,
+    "field_border_margin_m": 0.5,
+    "max_z_error_m": 0.75
+  },
+  "stream": {
+    "enabled": true,
+    "base_port": 1181,
+    "max_fps": 30,
+    "jpeg_quality": 80
+  },
+  "calibration_board": {
+    "squares_x": 12,
+    "squares_y": 9,
+    "square_length_m": 0.03,
+    "marker_length_m": 0.023,
+    "dict": "DICT_5X5_1000",
+    "legacy": false
+  },
+  "cameras": [
+    {
+      "name": "front_cam",
+      "device": "/dev/v4l/by-path/platform-fc880000.usb-usb-0:1:1.0-video-index0",
+      "width": 1600,
+      "height": 1300,
+      "fps": 50,
+      "fourcc": "MJPG",
+      "robot_to_camera": {
+        "x": -0.107467,
+        "y": -0.277089,
+        "z": 0.512699,
+        "roll_deg": 0,
+        "pitch_deg": -31.898,
+        "yaw_deg": 10
+      },
+      "std_dev_factor": 1.0,
+      "exposure": null,
+      "gain": null
+    },
+    {
+      "name": "front_left_cam",
+      "device": "/dev/v4l/by-path/platform-fc800000.usb-usb-0:1:1.0-video-index0",
+      "width": 1600,
+      "height": 1300,
+      "fps": 50,
+      "fourcc": "MJPG",
+      "robot_to_camera": {
+        "x": -0.107467,
+        "y": 0.277089,
+        "z": 0.512699,
+        "roll_deg": 0,
+        "pitch_deg": -31.898,
+        "yaw_deg": -10
+      },
+      "std_dev_factor": 1.0,
+      "exposure": null,
+      "gain": null
+    }
+  ]
+}
