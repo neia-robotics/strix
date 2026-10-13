@@ -27,8 +27,21 @@ produce duplicate-symbol clashes.  `test/check_exports.sh` verifies this.
 
 ## Status
 
-The library has **not** run on NVIDIA hardware yet. What has been verified:
+The library has run on an NVIDIA GPU (Tesla T4, x86) but not yet on a Jetson.
+What has been verified:
 
+* **On a GPU** (Google Colab, Tesla T4 / sm_75, Ubuntu 24.04, CUDA 13.0, driver
+  580, built for sm_75 and sm_87 with `tools/validate_gpu.sh`, October 2026): every
+  check passed. `atgpu_capi_test` finds tag 554, nothing, and tag 585 with corners
+  within 0.013 px of WPILib's detector and decision margins within 0.03; the GRAY8 and
+  YUYV paths agree; all error paths return a status without aborting. The ctypes smoke
+  test passes, including with `robotpy_apriltag` loaded first in the same process. Owl's
+  synthetic test against the CPU detector on 277 shared tags: corner difference median
+  0.001 px, max 0.154 px, one far tag found only by the CPU detector (the GPU treats
+  `min_cluster_pixels` below 24 as 24). Four processes each holding a 1280x800 detector
+  ran together for 15 s without errors; GPU memory peaked at 1243 MiB across the
+  multi-process runs. T4 timings (1280x800: 2.8 ms alone, 8.6-9.0 ms median each with
+  four processes sharing the GPU) don't predict Orin speed.
 * The CUDA build (`-DATGPU_BACKEND=cuda`, `CMAKE_CUDA_ARCHITECTURES=87`) compiles
   and links in CI with nvcc 12.6 and CMake 3.26+ (in the `nvidia/cuda:12.6.3-devel-ubuntu22.04`
   container, no GPU), and the result exports only `atgpu_*`.
@@ -41,8 +54,9 @@ The library has **not** run on NVIDIA hardware yet. What has been verified:
   `ATGPU_ERROR_FATAL_TRAPPED`.
 * The CMake logic for offline dependency resolution and for downloading.
 
-Running the CUDA backend (`src/atgpu_backend_cuda.cu`) and the Jetson instructions
-below are still untested.  See "First checks on the Jetson".
+Still untested: an ARM host with a GPU, CUDA 12 on Ubuntu 22.04 at runtime (JetPack 6's
+combination), the Jetson's shared CPU/GPU memory, and the Jetson instructions below.
+See "First checks on the Jetson".
 
 ## API in one screen
 
