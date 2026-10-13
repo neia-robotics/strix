@@ -85,7 +85,7 @@ python -m pytest -q tusk/robotpy/tests                  # in a RobotPy 2026 and 
 
 ## Status
 
-Owl runs on Choate's Orange Pi 5 with two OV2311 cameras. It started as Choate's camtest; this repo merges its `jetson` and `biggie` (pre-CKI) branches. Tusk passes its tests on both WPILib seasons, but nothing has run on a Systemcore yet. The GPU detector has only been built and tested in its CPU mode. The first Jetson run is next on the [roadmap](docs/roadmap.md).
+Owl runs on Choate's Orange Pi 5 with two OV2311 cameras. It started as Choate's camtest; this repo merges its `jetson` and `biggie` (pre-CKI) branches. Tusk passes its tests on both WPILib seasons, but nothing has run on a Systemcore yet. The GPU detector's CUDA code compiles for the Jetson's GPU (sm_87) in CI, and its tests pass in CPU mode, but it hasn't run on a GPU yet. The first Jetson run is next on the [roadmap](docs/roadmap.md).
 
 ## Credits and license
 

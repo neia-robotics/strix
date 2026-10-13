@@ -27,20 +27,22 @@ produce duplicate-symbol clashes.  `test/check_exports.sh` verifies this.
 
 ## Status
 
-As of this commit the library has **not** been compiled or run on NVIDIA
-hardware.  What has been verified (macOS, Apple clang, glog 0.7.1):
+The library has **not** run on NVIDIA hardware yet. What has been verified:
 
+* The CUDA build (`-DATGPU_BACKEND=cuda`, `CMAKE_CUDA_ARCHITECTURES=87`) compiles
+  and links in CI with nvcc 12.6 and CMake 3.26+ (in the `nvidia/cuda:12.6.3-devel-ubuntu22.04`
+  container, no GPU), and the result exports only `atgpu_*`.
 * `-DATGPU_BACKEND=cpu`, a host-only build of the same C layer over the
-  AprilTag fork's CPU detector: builds, exports only `atgpu_*`, passes
+  AprilTag fork's CPU detector (macOS with Apple clang and glog 0.7.1, and Ubuntu
+  24.04 in CI): builds, exports only `atgpu_*`, passes
   `atgpu_capi_test` (reference detections match WPILib's detector within
   0.02 px on the repo's test images), passes the ctypes smoke script, and the
   glog fatal-error trap converts a simulated CHECK failure into
   `ATGPU_ERROR_FATAL_TRAPPED`.
 * The CMake logic for offline dependency resolution and for downloading.
 
-The CUDA backend (`src/atgpu_backend_cuda.cu`), the CUDA parts of the CMake
-file, and the Jetson instructions below are written against the sources but
-untested.  See "First checks on the Jetson".
+Running the CUDA backend (`src/atgpu_backend_cuda.cu`) and the Jetson instructions
+below are still untested.  See "First checks on the Jetson".
 
 ## API in one screen
 

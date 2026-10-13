@@ -7,11 +7,11 @@
 - Choate's tuned config is kept as `owl/configs/7407.json`.
 - The GPU detector's C API and the 971 sources it needs are vendored, with provenance in `native/gpu_detector/UPSTREAM.md`.
 - Tusk works on WPILib 2026 and 2027 in both languages, with shared test bytes so RobotPy and Java can't drift apart. See `docs/wpilib-2027.md`.
-- CI runs on every push: Owl, Tusk (both languages, both seasons), NT interop across seasons, the GPU C API in CPU mode, and a CUDA compile-only build.
+- CI runs on every push: Owl, Tusk (both languages, both seasons), NT interop across seasons, the GPU C API in CPU mode, and a CUDA compile-only build for sm_87. The CUDA build compiles and links with nvcc 12.6 and CMake 3.26+.
 
 ## Next
 
-1. First CUDA build: get the `gpu-detector-cuda-compile` CI job green, then run the Jetson checklist in `native/gpu_detector/capi/README.md`.
+1. First run on a Jetson: the Jetson checklist in `native/gpu_detector/capi/README.md`.
 2. Jetson benchmarks with the same cameras, comparing fps and `processMs` per camera between the CPU and `cuda` backends. Write results to `docs/benchmarks.md`.
 3. Orange Pi regression run: Choate's two OV2311s on the restructured code.
 4. Raw gray capture for USB3 global-shutter cameras: skip MJPEG and the color conversion, and hand gray frames straight to the detector.

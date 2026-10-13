@@ -112,8 +112,6 @@ jobs:
     name: GPU detector C API (CUDA compile only, sm_87)
     runs-on: ubuntu-24.04
     container: nvidia/cuda:12.6.3-devel-ubuntu22.04
-    # The CUDA build has never been compiled; keep this informational until it's green.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       # apt's CMake 3.22 can't ask nvcc for C++20; 3.26+ can (same on JetPack 6).
