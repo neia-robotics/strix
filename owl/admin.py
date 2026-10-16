@@ -25,18 +25,50 @@ from config import load_config
 OWL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def _unit() -> str | None:
-    """The systemd unit Owl runs in (owl.service), from its cgroup; None outside systemd."""
+def _systemctl_show(unit: str, prop: str) -> str:
+    r = subprocess.run(["systemctl", "show", unit, "-p", prop, "--value"],
+                       capture_output=True, text=True, timeout=5)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def owl_unit() -> str | None:
+    """The systemd service Owl runs as (owl.service), or None.
+
+    Being inside some service's cgroup isn't enough: started by hand from a shell that
+    a service spawned (a CI runner, a remote-desktop session), Owl would be in THAT
+    service, and restarting or reading logs would act on it. So the unit's main
+    process must be Owl's main process (this one, or a camera process's parent)."""
+    unit = _cgroup_unit()
+    if not unit or not shutil.which("systemctl"):
+        return None
+    try:
+        main_pid = int(_systemctl_show(unit, "MainPID") or 0)
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return None
+    return unit if main_pid in (os.getpid(), os.getppid()) else None
+
+
+def _cgroup_unit() -> str | None:
     try:
         with open("/proc/self/cgroup") as f:
             m = re.search(r"/([^/]+\.service)\s*$", f.read(), re.M)
-        return m.group(1) if m else None
     except OSError:
         return None
+    return m.group(1) if m else None
+
+
+def restart_blocker() -> str | None:
+    """Why Owl can't restart itself (exit and let systemd start it again), or None."""
+    unit = owl_unit()
+    if unit is None:
+        return "Owl isn't running as a systemd service, so it can't restart itself; restart it by hand"
+    if _systemctl_show(unit, "Restart") in ("", "no"):
+        return f"{unit} doesn't have Restart= set, so exiting would leave Owl stopped; restart it by hand"
+    return None
 
 
 def logs(lines: int = 500) -> str:
-    unit = _unit()
+    unit = owl_unit()
     if not unit or not shutil.which("journalctl"):
         raise RuntimeError("logs are only available when Owl runs as a systemd service")
     r = subprocess.run(["journalctl", "-u", unit, "-n", str(lines), "--no-pager", "-o", "short-iso"],

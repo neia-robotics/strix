@@ -26,6 +26,7 @@ import socket
 import threading
 import time
 
+import admin
 from config import load_config, write_config
 from network import apply_system, ethernet_interfaces, nt_target_text, parse_nt_target, system_support, validate_network
 from recovery import needs_restart, needs_cpu_fallback
@@ -342,13 +343,13 @@ def main():
             ok = settings.set_from_web(msg[1], msg[2])
             send_control(msg[1], {"_acks": [{"id": msg[3], "ok": ok, "status": settings.status_text}]})
         elif msg[0] == "restart":  # from the coprocessor page
-            # systemd sets INVOCATION_ID for a service; without one, nothing would start Owl again.
-            ok = bool(os.environ.get("INVOCATION_ID"))
-            if ok:
+            # Exiting only restarts Owl if it is a systemd service with Restart= (admin.py).
+            blocker = admin.restart_blocker()
+            if blocker is None:
                 restart_at[0] = time.monotonic() + 1.0  # after the page gets its answer
                 print("restart requested from the coprocessor page", flush=True)
-            send_control(msg[1], {"_acks": [{"id": msg[3], "ok": ok, "status": "restarting Owl…" if ok else
-                "Owl isn't running as a systemd service, so it can't restart itself; restart it by hand"}]})
+            send_control(msg[1], {"_acks": [{"id": msg[3], "ok": blocker is None,
+                                             "status": blocker or "restarting Owl…"}]})
         elif msg[0] == "pipeline":  # from a camera's tuning page
             try:
                 ok, status = True, settings.pipeline_op(msg[1], msg[2])

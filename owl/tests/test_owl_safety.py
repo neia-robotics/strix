@@ -448,3 +448,19 @@ def test_pipeline_management(live):
     with pytest.raises(ValueError): s.pipeline_op(0, {'op': 'delete'})
     s.pipeline_op(0, {'op': 'add', 'name': 'new one'})
     assert s.pipes[0][-1]['exposure'] is None and s.pipeline_info(0)['active'] == 'new one'
+
+
+@pytest.mark.parametrize('cgroup,props,expect', [
+    (None, {}, "isn't running as a systemd service"),
+    # Started by hand inside another service (a CI runner): that service's main process isn't Owl.
+    ('actions.runner.service', {'MainPID': '1', 'Restart': 'always'}, "isn't running as a systemd service"),
+    ('owl.service', {'MainPID': 'SELF', 'Restart': 'no'}, "doesn't have Restart="),
+    ('owl.service', {'MainPID': 'SELF', 'Restart': 'always'}, None)])
+def test_restart_only_as_its_own_service(monkeypatch, cgroup, props, expect):
+    monkeypatch.setattr(admin, '_cgroup_unit', lambda: cgroup)
+    monkeypatch.setattr(admin.shutil, 'which', lambda _: '/bin/systemctl')
+    monkeypatch.setattr(admin, '_systemctl_show',
+                        lambda unit, prop: str(os.getpid()) if props.get(prop) == 'SELF' else props.get(prop, ''))
+    blocker = admin.restart_blocker()
+    assert (blocker is None) if expect is None else (expect in blocker)
+    assert (admin.owl_unit() is not None) == (props.get('MainPID') == 'SELF')
