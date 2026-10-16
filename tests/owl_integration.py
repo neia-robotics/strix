@@ -95,7 +95,46 @@ try:
             except (OSError, ValueError): pass
             time.sleep(.2)
         else: raise AssertionError('restarted camera did not recover frames')
-    print(f'PASS: two cameras, settings, origin policy, worker-death ({death_signal.name}) and stalled-worker recovery')
+    # Pipelines: duplicate, edit only the active one, then the robot switches back by name over NT.
+    print('pipeline response:',post(11981,'/api/pipeline',{'op':'duplicate'}))
+    post(11981,'/api/set',{'quad_decimate':3.0});time.sleep(.4)
+    vals=get(11981,'/api/state')['values'];assert vals['_pipelines']['active']=='default (1)' and vals['quad_decimate']==3.0,vals
+    state_sub=inst.getStringTopic('/Vision/cameras/audit0/pipelineState').subscribe('')
+    request=inst.getStringTopic('/Vision/cameras/audit0/pipelineRequest').publish();request.set('default')
+    deadline=time.monotonic()+4
+    while time.monotonic()<deadline:
+        vals=get(11981,'/api/state')['values']
+        if vals['_pipelines']['active']=='default' and state_sub.get()=='default': break
+        time.sleep(.2)
+    assert vals['_pipelines']['active']=='default' and vals['quad_decimate']==2.0,vals
+    print('robot switched pipeline to:',state_sub.get())
+    # Networking page: NT target saved to config.json and applied live. (manage stays off:
+    # turning it on would change this machine's hostname/IP.)
+    keep={'manage':False,'hostname':'owl','interface':'','mode':'dhcp','ip':'','prefix':24,'gateway':''}
+    try:
+        post(11981,'/api/network',{'nt_server':'','standalone':False,'network':keep})
+        raise AssertionError('empty NT target accepted')
+    except urllib.error.HTTPError as error:
+        assert error.code == 400
+    print('network response:',post(11981,'/api/network',{'nt_server':'7407','standalone':True,'network':keep}))
+    saved=json.loads(config.read_text());assert saved['nt']['team']==7407 and saved['nt']['standalone'] is True and saved['network']==keep
+    print('network response:',post(11982,'/api/network',{'nt_server':'127.0.0.1','standalone':False,'network':keep}))
+    deadline=time.monotonic()+4
+    while time.monotonic()<deadline:
+        net=get(11981,'/api/system')['owl']
+        if net['nt']['mode']=='client': break
+        time.sleep(.3)
+    assert net['nt']['target']=='127.0.0.1' and net['network']['nt_server']=='127.0.0.1' and net['network']['standalone'] is False, net
+    # Maintenance buttons. Not a systemd service here, so restart is refused and logs are unavailable.
+    with urllib.request.urlopen('http://127.0.0.1:11981/api/export',timeout=5) as response:
+        assert 'attachment' in response.headers['Content-Disposition']; exported=response.read()
+    assert 'config.json' in __import__('zipfile').ZipFile(__import__('io').BytesIO(exported)).namelist()
+    for path,body,code in [('/api/admin',{'op':'restart'},400),('/api/admin',{'op':'nope'},400)]:
+        try: post(11981,path,body); raise AssertionError(f'{body} accepted')
+        except urllib.error.HTTPError as error: assert error.code==code,(body,error.code)
+    try: get(11981,'/api/logs'); raise AssertionError('logs outside systemd')
+    except urllib.error.HTTPError as error: assert error.code==500
+    print(f'PASS: two cameras, settings, origin policy, worker-death ({death_signal.name}) and stalled-worker recovery, pipelines, networking, maintenance')
 finally:
     ntcore.NetworkTableInstance.destroy(inst)
     proc.terminate()

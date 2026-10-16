@@ -32,6 +32,7 @@ import uuid
 import cv2
 import numpy as np
 
+import admin
 from calibration_session import CalibrationSession, board_png
 from camera_controls import apply_exposure_gain, control_ranges, list_modes
 from config import (CameraConfig, calibration_path, find_calibration, load_field_layout,
@@ -40,6 +41,7 @@ from messages import PoseObservation, pose_to_tuple
 from pose_solver import DetectorSettings, PoseSolver, SolverSettings, make_detector
 import sysinfo
 from quality_recording import QualityRecorder
+import network
 from recovery import CAPTURE_TIMEOUT_S
 from stream_server import MjpegStreamServer, annotate
 
@@ -289,7 +291,12 @@ class CameraWorker:
             self.stream = MjpegStreamServer(
                 cam.name, cam.stream_port, int(stream_cfg.get("jpeg_quality", 80)),
                 self.web_state, self.web_action,
-                {"/api/board.png": self.board_image, "/api/system": self.system_info})
+                {"/api/board.png": self.board_image, "/api/system": self.system_info,
+                 "/api/logs": lambda: ("text/plain; charset=utf-8", admin.logs(400).encode()),
+                 "/api/logs/download": lambda: ("text/plain; charset=utf-8", admin.logs(20000).encode(),
+                                                f"owl-{time.strftime('%Y%m%d-%H%M%S')}.log"),
+                 "/api/export": lambda: ("application/zip", admin.export_settings(self.cam.config_path),
+                                         f"owl-settings-{time.strftime('%Y%m%d-%H%M%S')}.zip")})
         self.grabber = LatestFrameGrabber(cam)
 
     def log(self, msg: str) -> None:
@@ -365,10 +372,37 @@ class CameraWorker:
         rows.sort(key=lambda r: r["id"])
         return rows
 
-    def web_action(self, kind, data=None) -> None:
+    def web_action(self, kind, data=None) -> str | None:
         if kind == "calib":
             self.calib_cmds.put(data or {})
-            return
+            return None
+        if kind in ("admin", "import"):
+            return self.admin_action(kind, data)
+        return self._ask_main(kind, data)
+
+    def admin_action(self, kind, data) -> str:
+        """Maintenance buttons on the coprocessor page. File changes happen here; the main
+        process only does the restart that follows (it owns the camera processes)."""
+        op = "import" if kind == "import" else data.get("op")
+        if op == "reboot":
+            return network.run_helper(["reboot"])
+        if op == "restart":
+            return self._ask_main("restart", None)
+        if op == "import":
+            status = admin.import_settings(self.cam.config_path, data)
+        elif op == "factory_reset":
+            status = admin.factory_reset(self.cam.config_path)
+        elif op == "rename":
+            status = admin.rename_camera(self.cam.config_path, self.cam.id, data.get("name", ""))
+        else:
+            raise ValueError(f"unknown operation: {op}")
+        self.log(status)
+        try:
+            return f"{status}; {self._ask_main('restart', None)}"
+        except (ValueError, TimeoutError) as e:
+            return f"{status}; restart Owl to use it ({e})"
+
+    def _ask_main(self, kind, data=None) -> str | None:
         # The main process owns settings (NT + save); it sends the result back via ctrl_queue.
         request_id = uuid.uuid4().hex
         event = threading.Event()
@@ -381,6 +415,7 @@ class CameraWorker:
                 raise TimeoutError("settings owner did not acknowledge the request")
             if not reply["ok"]:
                 raise ValueError(reply["status"])
+            return reply.get("status")
         finally:
             with self.web_lock:
                 self.web_requests.pop(request_id, None)
@@ -426,7 +461,9 @@ class CameraWorker:
                             reply.update(ack)
                             event.set()
                 self.ui["values"] = {**self.ui["values"], **changes}
-                det_changes = {k: v for k, v in changes.items() if k in DETECTOR_KEYS}
+                # A pipeline switch resends every value; rebuild the detector only if one changed.
+                det_changes = {k: v for k, v in changes.items()
+                               if k in DETECTOR_KEYS and getattr(self.det_settings, k) != v}
                 if det_changes:
                     self.det_settings = dataclasses.replace(self.det_settings, **det_changes)
                     self.detector = make_detector(self.det_settings, self.log)

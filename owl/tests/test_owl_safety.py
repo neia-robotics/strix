@@ -194,3 +194,273 @@ def test_recovery_distinguishes_native_faults_and_watchdogs():
     assert needs_restart(True, 61, 0, False)
     assert needs_restart(True, 11, 0, True)
     assert needs_restart(False, 1, 0, False)
+
+
+# ---- networking page (network.py, deploy/owl-admin) ----
+import json
+import os
+import subprocess
+import sys
+import network
+from network import parse_nt_target, validate_network
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('7407', (7407, None)), (' 254 ', (254, None)), ('10.74.7.2', (None, '10.74.7.2')),
+    ('roboRIO-7407-FRC.local', (None, 'roborio-7407-frc.local')), ('', (None, None)), (None, (None, None))])
+def test_nt_target(text, expected):
+    assert parse_nt_target(text) == expected
+
+
+@pytest.mark.parametrize('text', ['0', '99999', 'http://10.0.0.2', '10.0.0.2:5810', 'bad host', '-x.local'])
+def test_bad_nt_target(text):
+    with pytest.raises(ValueError): parse_nt_target(text)
+
+
+STATIC = {'manage': True, 'hostname': 'Owl-Front', 'interface': 'eth0', 'mode': 'static',
+          'ip': '10.74.7.11', 'prefix': 24, 'gateway': '10.74.7.1'}
+
+
+def test_network_static_normalized():
+    n = validate_network(STATIC)
+    assert n['hostname'] == 'owl-front' and n['ip'] == '10.74.7.11' and n['gateway'] == '10.74.7.1'
+    assert validate_network({}) == network.DEFAULT_NETWORK
+
+
+@pytest.mark.parametrize('change', [
+    {'hostname': 'owl.local'}, {'hostname': '-owl'}, {'hostname': ''}, {'interface': ''},
+    {'interface': 'eth0; reboot'}, {'mode': 'manual'}, {'ip': ''}, {'ip': '10.74.7.0'}, {'ip': '10.74.7.255'},
+    {'gateway': '10.74.8.1'}, {'gateway': '10.74.7.11'}, {'prefix': 31}, {'prefix': True},
+    {'manage': 'yes'}, {'surprise': 1}])
+def test_bad_network(change):
+    with pytest.raises(ValueError): validate_network({**STATIC, **change})
+
+
+def test_dhcp_keeps_only_valid_static_fields():
+    assert validate_network({**STATIC, 'mode': 'dhcp'})['ip'] == '10.74.7.11'
+    n = validate_network({**STATIC, 'mode': 'dhcp', 'ip': '10.74.7', 'gateway': 'x'})
+    assert n['ip'] == n['gateway'] == ''
+
+
+def test_config_network_section(tmp_path):
+    raw = json.loads((Path(__file__).resolve().parents[1] / 'config.example.json').read_text())
+    assert load_config(str(Path(__file__).resolve().parents[1] / 'config.example.json')).network['manage'] is False
+    raw['network'] = {**STATIC, 'hostname': 'bad_name'}
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError): load_config(str(path))
+
+
+def test_apply_refuses_when_unsupported(monkeypatch):
+    monkeypatch.setattr(network, 'system_support', lambda: 'not here')
+    monkeypatch.setattr(network.subprocess, 'run', lambda *a, **k: pytest.fail('helper must not run'))
+    with pytest.raises(RuntimeError, match='not here'): network.apply_system(validate_network(STATIC))
+
+
+def test_root_helper_is_standalone_and_needs_root():
+    helper = Path(__file__).resolve().parents[2] / 'deploy' / 'owl-admin'
+    source = helper.read_text()
+    compile(source, str(helper), 'exec')
+    assert 'import network' not in source and 'from network' not in source  # nothing from the user-writable repo
+    if hasattr(os, 'geteuid') and os.geteuid() != 0:
+        r = subprocess.run([sys.executable, str(helper), 'network', '--hostname', 'x', '--interface', 'lo', '--mode', 'dhcp'],
+                           capture_output=True, text=True)
+        assert r.returncode == 1 and 'root' in r.stderr
+
+
+# ---- maintenance buttons (admin.py) ----
+import zipfile, io
+import admin
+
+
+def _owl_dir(tmp_path):
+    src = Path(__file__).resolve().parents[1]
+    raw = json.loads((src / 'config.example.json').read_text())
+    raw['nt']['team'] = 9644
+    raw['cameras'][0].update(exposure=20, std_dev_factor=2.0)
+    raw['detector']['quad_decimate'] = 3.0
+    cfg = tmp_path / 'config.json'
+    cfg.write_text(json.dumps(raw))
+    (tmp_path / 'calibrations').mkdir()
+    (tmp_path / 'calibrations' / 'front_left_1600x1200.json').write_text('{"rms": 0.1}')
+    return cfg
+
+
+def test_export_import_round_trip(tmp_path):
+    cfg = _owl_dir(tmp_path)
+    data = admin.export_settings(str(cfg))
+    assert sorted(zipfile.ZipFile(io.BytesIO(data)).namelist()) == ['calibrations/front_left_1600x1200.json', 'config.json']
+    cfg.write_text(cfg.read_text().replace('9644', '1234'))
+    status = admin.import_settings(str(cfg), data)
+    assert '1 calibration' in status and json.loads(cfg.read_text())['nt']['team'] == 9644
+    backups = list((tmp_path / 'backups').iterdir())
+    assert len(backups) == 1 and '1234' in (backups[0] / 'config.json').read_text()
+
+
+def test_import_rejects_bad_config_without_touching_files(tmp_path):
+    cfg = _owl_dir(tmp_path)
+    before = cfg.read_text()
+    for bad in (b'{"cameras": []', b'{"nt": {}}', b'PK\x03\x04junk'):
+        with pytest.raises(ValueError): admin.import_settings(str(cfg), bad)
+    assert cfg.read_text() == before and not (tmp_path / 'backups').exists()
+
+
+def test_factory_reset_keeps_cameras_and_team(tmp_path):
+    cfg = _owl_dir(tmp_path)
+    old = json.loads(cfg.read_text())
+    admin.factory_reset(str(cfg))
+    new = json.loads(cfg.read_text())
+    assert new['nt']['team'] == 9644 and new['detector']['quad_decimate'] == 2.0
+    assert [c['device'] for c in new['cameras']] == [c['device'] for c in old['cameras']]
+    assert new['cameras'][0]['exposure'] is None and new['cameras'][0]['std_dev_factor'] == 1.0
+    assert not (tmp_path / 'calibrations').exists()
+    assert len(list((tmp_path / 'backups').glob('*/calibrations/*.json'))) == 1
+    load_config(str(cfg))
+
+
+def test_rename_camera_moves_its_calibrations_only(tmp_path):
+    cfg = _owl_dir(tmp_path)
+    calib = tmp_path / 'calibrations'
+    (calib / 'front_left.json').write_text('{}')
+    (calib / 'front_left_cam_1600x1200.json').write_text('{}')  # another camera's prefix: untouched
+    status = admin.rename_camera(str(cfg), 0, 'intake')
+    assert '2 calibration files' in status
+    assert sorted(p.name for p in calib.iterdir()) == ['front_left_cam_1600x1200.json', 'intake.json', 'intake_1600x1200.json']
+    assert json.loads(cfg.read_text())['cameras'][0]['name'] == 'intake'
+    load_config(str(cfg))
+
+
+@pytest.mark.parametrize('index,name', [(0, 'back_right'), (0, 'bad name'), (0, ''), (0, 'x' * 33), (5, 'ok')])
+def test_bad_rename(tmp_path, index, name):
+    cfg = _owl_dir(tmp_path)
+    before = cfg.read_text()
+    with pytest.raises(ValueError): admin.rename_camera(str(cfg), index, name)
+    assert cfg.read_text() == before
+
+
+# ---- pipelines (pipelines.py, settings.LiveSettings) ----
+import ntcore
+import pipelines as pl
+from settings import LiveSettings
+
+
+def _two_pipeline_config(tmp_path):
+    cfg = _owl_dir(tmp_path)
+    raw = json.loads(cfg.read_text())
+    raw['cameras'][0]['pipelines'] = [{'name': 'far', 'quad_decimate': 1.0},
+                                      {'name': 'fast', 'quad_decimate': 3.0, 'resolution': '800x600', 'exposure': 5}]
+    raw['cameras'][0]['pipeline'] = 'fast'
+    cfg.write_text(json.dumps(raw))
+    return cfg
+
+
+def test_old_config_gets_one_default_pipeline():
+    cam = load_config(str(Path(__file__).resolve().parents[1] / 'config.example.json')).cameras[0]
+    assert cam.pipeline == 'default' and len(cam.pipelines) == 1
+    assert cam.pipelines[0]['resolution'] == f'{cam.width}x{cam.height}' and cam.pipelines[0]['exposure'] is None
+
+
+def test_camera_boots_into_default_pipeline(tmp_path):
+    cam = load_config(str(_two_pipeline_config(tmp_path))).cameras[0]
+    assert (cam.width, cam.height, cam.exposure, cam.pipeline) == (800, 600, 5, 'fast')
+    far = cam.pipelines[0]
+    assert far['quad_decimate'] == 1.0 and far['exposure'] == 20  # gaps filled from the camera's own values
+
+
+@pytest.mark.parametrize('pipes,default', [
+    ([], None), ([{'name': 'a'}, {'name': 'A'}], None), ([{'name': 'a'}], 'b'), ([{'name': 'bad/name'}], None),
+    ([{'name': 'a', 'quad_decimate': 0}], None), ([{'name': 'a', 'mystery': 1}], None),
+    ([{'name': f'p{i}'} for i in range(17)], None)])
+def test_bad_pipelines(tmp_path, pipes, default):
+    cfg = _owl_dir(tmp_path)
+    raw = json.loads(cfg.read_text())
+    raw['cameras'][0]['pipelines'] = pipes
+    if default: raw['cameras'][0]['pipeline'] = default
+    cfg.write_text(json.dumps(raw))
+    with pytest.raises(ValueError): load_config(str(cfg))
+
+
+def test_unique_names():
+    assert pl.unique_name(['main'], 'other') == 'other'
+    assert pl.unique_name(['main', 'Main (1)'], 'main') == 'main (2)'
+    assert pl.unique_name(['main (1)'], 'main (1)') == 'main (2)'
+
+
+@pytest.fixture
+def live(tmp_path):
+    inst = ntcore.NetworkTableInstance.create()
+    cfg = load_config(str(_two_pipeline_config(tmp_path)))
+    s = LiveSettings(inst, cfg)
+    yield inst, cfg, s
+    ntcore.NetworkTableInstance.destroy(inst)
+
+
+def test_switching_sends_only_what_differs(live):
+    inst, cfg, s = live
+    s.poll()
+    assert s.pipeline_op(0, {'op': 'select', 'name': 'FAR'}) == 'switched to far'
+    _, per_cam = s.poll()
+    msg = per_cam[0]
+    assert msg['quad_decimate'] == 1.0 and msg['resolution'] == '1600x1200' and msg['exposure'] == 20
+    assert 'std_dev_factor' not in msg  # same in both pipelines
+    assert msg['_pipelines'] == {'names': ['far', 'fast'], 'active': 'far', 'default': 'fast'}
+    assert not s.dirty  # a switch alone isn't an unsaved change
+    assert inst.getStringTopic('/Vision/cameras/front_left/pipelineState').subscribe('').get() == 'far'
+
+
+def test_edits_go_to_the_active_pipeline_and_save(live):
+    inst, cfg, s = live
+    s.pipeline_op(0, {'op': 'select', 'name': 'far'}); s.poll()
+    assert s.set_from_web(0, {'min_decision_margin': 40})
+    s.poll()
+    assert s.dirty and s.pipes[0][0]['min_decision_margin'] == 40 and s.pipes[0][1]['min_decision_margin'] != 40
+    s.request_save(); s.poll()
+    saved = json.loads(Path(cfg.path).read_text())['cameras'][0]
+    assert saved['pipeline'] == 'fast' and saved['pipelines'][0]['min_decision_margin'] == 40
+    assert (saved['width'], saved['height'], saved['exposure']) == (800, 600, 5)  # mirrors the default
+    load_config(cfg.path)
+
+
+def test_robot_request_switches_by_name_once(live):
+    inst, cfg, s = live
+    req = inst.getStringTopic('/Vision/cameras/front_left/pipelineRequest').publish()
+    req.set('far'); s.poll()
+    assert s.pipeline_info(0)['active'] == 'far'
+    s.pipeline_op(0, {'op': 'select', 'name': 'fast'}); s.poll()
+    s.poll()  # the robot's old request doesn't pull it back
+    assert s.pipeline_info(0)['active'] == 'fast'
+    req.set('nonexistent'); s.poll()
+    assert s.pipeline_info(0)['active'] == 'fast'
+
+
+def test_pipeline_management(live):
+    inst, cfg, s = live
+    s.pipeline_op(0, {'op': 'duplicate'})
+    assert s.pipeline_info(0)['active'] == 'fast (1)' and s.pipes[0][2]['resolution'] == '800x600'
+    s.pipeline_op(0, {'op': 'rename', 'name': 'auto'})
+    s.pipeline_op(0, {'op': 'default'})
+    assert s.pipeline_info(0)['default'] == 'auto'
+    with pytest.raises(ValueError): s.pipeline_op(0, {'op': 'rename', 'name': 'FAR'})
+    s.pipeline_op(0, {'op': 'delete'})
+    info = s.pipeline_info(0)
+    assert info['names'] == ['far', 'fast'] and info['default'] == 'far' and info['active'] == 'fast'
+    s.pipeline_op(0, {'op': 'delete'}); 
+    with pytest.raises(ValueError): s.pipeline_op(0, {'op': 'delete'})
+    s.pipeline_op(0, {'op': 'add', 'name': 'new one'})
+    assert s.pipes[0][-1]['exposure'] is None and s.pipeline_info(0)['active'] == 'new one'
+
+
+@pytest.mark.parametrize('cgroup,props,expect', [
+    (None, {}, "isn't running as a systemd service"),
+    # Started by hand inside another service (a CI runner): that service's main process isn't Owl.
+    ('actions.runner.service', {'MainPID': '1', 'Restart': 'always'}, "isn't running as a systemd service"),
+    ('owl.service', {'MainPID': 'SELF', 'Restart': 'no'}, "doesn't have Restart="),
+    ('owl.service', {'MainPID': 'SELF', 'Restart': 'always'}, None)])
+def test_restart_only_as_its_own_service(monkeypatch, cgroup, props, expect):
+    monkeypatch.setattr(admin, '_cgroup_unit', lambda: cgroup)
+    monkeypatch.setattr(admin.shutil, 'which', lambda _: '/bin/systemctl')
+    monkeypatch.setattr(admin, '_systemctl_show',
+                        lambda unit, prop: str(os.getpid()) if props.get(prop) == 'SELF' else props.get(prop, ''))
+    blocker = admin.restart_blocker()
+    assert (blocker is None) if expect is None else (expect in blocker)
+    assert (admin.owl_unit() is not None) == (props.get('MainPID') == 'SELF')

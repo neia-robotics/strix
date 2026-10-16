@@ -7,6 +7,10 @@
   /api/set       POST {"exposure": 20, ...} -> applied live (same as editing NT)
   /api/save      POST -> write current settings to config.json
   /api/calib     POST {"op": "start" | "capture" | "calibrate" | "save" | ...} calibration
+  /api/network   POST NetworkTables target, hostname and IP from the coprocessor page
+  /api/admin     POST {"op": "restart" | "reboot" | "factory_reset" | "rename", "name": ...}
+  /api/import    POST settings zip (or config.json) as the raw body
+  /api/pipeline  POST {"op": "select" | "add" | "duplicate" | "rename" | "delete" | "default", "name": ...}
   /api/board.png GET  printable calibration board for the current board settings
 
 Frames are encoded ONLY while someone is watching that stream -- an unwatched
@@ -28,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 import numpy as np
 
+IMPORT_LIMIT = 20 * 1024 * 1024  # settings zip: config.json + calibrations
 _PAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_ui.html")
 
 
@@ -59,6 +64,12 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             self.slots.release()
 
 
+def _reason(error) -> str:
+    """An error as an HTTP reason phrase (the page shows it): one latin-1 line."""
+    text = (str(error).splitlines() or [type(error).__name__])[0]
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
 def allowed_origin(origin, host):
     if not origin:
         return True  # non-browser clients; this is not authentication
@@ -81,9 +92,10 @@ class _Channel:
 class MjpegStreamServer:
     def __init__(self, name: str, port: int, jpeg_quality: int = 80,
                  get_state=None, on_action=None, extra_get=None):
-        """get_state() -> dict for /api/state; on_action("set" | "save" | "calib", {...})
-        handles the settings page's requests. extra_get maps other GET paths to a
-        function returning (content type, bytes)."""
+        """get_state() -> dict for /api/state; on_action(kind, data) handles the settings
+        page's POSTs (kind is the path after /api/; data a dict, or bytes for /api/import).
+        extra_get maps other GET paths to a function returning (content type, bytes)
+        or (content type, bytes, download file name)."""
         self.name = name
         self.get_state = get_state
         self.on_action = on_action
@@ -155,11 +167,11 @@ class MjpegStreamServer:
                     return
                 if path in srv.extra_get:
                     try:
-                        ctype, body = srv.extra_get[path]()
+                        ctype, body, *filename = srv.extra_get[path]()
                     except Exception as e:
-                        self.send_error(500, str(e))
+                        self.send_error(500, _reason(e))
                         return
-                    self._send(200, ctype, body)
+                    self._send(200, ctype, body, filename[0] if filename else None)
                     return
                 if path in ("/stream.mjpg", "/stream"):
                     self._serve(srv.channels["stream"])
@@ -173,43 +185,46 @@ class MjpegStreamServer:
                     self.send_error(403, "request origin is not this coprocessor")
                     return
                 path = self.path.split("?")[0]
-                if srv.on_action is None or path not in ("/api/set", "/api/save", "/api/calib"):
+                kind = path[len("/api/"):]
+                if srv.on_action is None or kind not in ("set", "save", "calib", "network", "admin", "import", "pipeline"):
                     self.send_error(404)
                     return
+                limit = IMPORT_LIMIT if kind == "import" else 65536
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
-                    if not 0 <= n <= 65536 or self.headers.get("Transfer-Encoding"):
+                    if not 0 <= n <= limit or self.headers.get("Transfer-Encoding"):
                         self.send_error(413, "request body too large or unsupported encoding")
                         return
-                    data = json.loads(self.rfile.read(n) or b"{}")
-                    if not isinstance(data, dict):
-                        raise ValueError("expected a JSON object")
-                except ValueError as e:
-                    self.send_error(400, str(e))
+                    body = self.rfile.read(n)
+                    if len(body) != n:
+                        raise ValueError("request body was cut short")
+                    if kind == "import":
+                        data = body
+                    else:
+                        data = json.loads(body or b"{}")
+                        if not isinstance(data, dict):
+                            raise ValueError("expected a JSON object")
+                except (ValueError, OSError) as e:
+                    self.send_error(400, _reason(e))
                     return
                 try:
-                    if path == "/api/set":
-                        srv.on_action("set", data)
-                    elif path == "/api/calib":
-                        srv.on_action("calib", data)
-                    else:
-                        srv.on_action("save")
+                    status = srv.on_action(kind, None if kind == "save" else data)
                 except ValueError as error:
-                    self.send_error(400, str(error))
+                    self.send_error(400, _reason(error))
+                    return
+                except RuntimeError as error:
+                    self.send_error(500, _reason(error))
                     return
                 except (TimeoutError, queue.Full):
                     self.send_error(503, "settings owner is busy or unavailable")
                     return
-                self._send(200, "application/json", b'{"ok":true}')
+                self._send(200, "application/json", json.dumps({"ok": True, "status": status}).encode())
 
-            def _send(self, code, ctype, body: bytes):
+            def _send(self, code, ctype, body: bytes, filename=None):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
-                # One page switches between cameras, and each camera is on its own port.
-                origin = self.headers.get("Origin")
-                if origin and allowed_origin(origin, self.headers.get("Host", "")):
-                    self.send_header("Access-Control-Allow-Origin", origin)
-                    self.send_header("Vary", "Origin")
+                if filename:
+                    self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
@@ -238,6 +253,16 @@ class MjpegStreamServer:
                 finally:
                     with ch.cond:
                         ch.clients -= 1
+
+            def end_headers(self):
+                # One page switches between cameras, and each camera is on its own port.
+                # Errors too, so that page can read why another camera refused a request.
+                origin = self.headers.get("Origin") if hasattr(self, "headers") else None
+                if origin and allowed_origin(origin, self.headers.get("Host", "")):
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Vary", "Origin")
+                    self.send_header("Access-Control-Expose-Headers", "Content-Disposition")
+                super().end_headers()
 
             def log_message(self, *args):
                 pass

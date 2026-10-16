@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""The few things Owl's coprocessor page does that need root: set the hostname and
+wired IP, and reboot.
+
+Runs as root (Owl calls it with `sudo -n`), so it is self-contained: it imports
+nothing from the Owl checkout, which the Owl user can write to. Install it
+root-owned, outside the repo, and allow only it in sudoers:
+
+  sudo install -o root -g root -m 755 deploy/owl-admin /usr/local/sbin/owl-admin
+  echo 'strix ALL=(root) NOPASSWD: /usr/local/sbin/owl-admin' | sudo tee /etc/sudoers.d/owl-admin
+  sudo chmod 440 /etc/sudoers.d/owl-admin && sudo visudo -c
+
+  owl-admin network --hostname owl --interface eth0 --mode dhcp
+  owl-admin network --hostname owl --interface eth0 --mode static --ip 10.74.7.11 --prefix 24 [--gateway 10.74.7.1]
+  owl-admin reboot
+
+The IP is set on a NetworkManager connection of its own, "owl-<interface>", with a
+higher autoconnect priority than the default one, so the original connection is
+left as it was (delete owl-<interface> to go back to it). Running it again with
+the same settings changes nothing.
+"""
+
+import argparse
+import ipaddress
+import os
+import re
+import socket
+import subprocess
+import sys
+
+LABEL = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+IFACE = re.compile(r"[A-Za-z0-9_.-]{1,15}")
+
+
+def fail(msg):
+    print(msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def run(*args, check=True):
+    r = subprocess.run(args, capture_output=True, text=True, timeout=45)
+    if check and r.returncode != 0:
+        fail(f"{' '.join(args[:3])}: {(r.stderr or r.stdout).strip() or f'exit {r.returncode}'}")
+    return r
+
+
+def set_hostname(name):
+    if socket.gethostname() == name:
+        return False
+    run("hostnamectl", "set-hostname", name)
+    # Keep the name resolvable locally, or sudo and others stall on a DNS lookup.
+    try:
+        with open("/etc/hosts") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    lines = [line for line in lines if not line.startswith("127.0.1.1")]
+    lines.append(f"127.0.1.1\t{name}")
+    tmp = "/etc/hosts.owl-tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, "/etc/hosts")
+    return True
+
+
+def set_ip(iface, mode, ip, prefix, gateway):
+    con = f"owl-{iface}"
+    if run("nmcli", "-g", "connection.id", "connection", "show", con, check=False).returncode != 0:
+        run("nmcli", "connection", "add", "type", "ethernet", "ifname", iface, "con-name", con,
+            "autoconnect", "yes", "connection.autoconnect-priority", "100", "ipv4.method", "auto")
+    want = (["ipv4.method", "manual", "ipv4.addresses", f"{ip}/{prefix}", "ipv4.gateway", gateway]
+            if mode == "static" else ["ipv4.method", "auto", "ipv4.addresses", "", "ipv4.gateway", ""])
+    have = run("nmcli", "-g", "ipv4.method,ipv4.addresses,ipv4.gateway", "connection", "show", con).stdout.split("\n")
+    have = [x.strip() for x in have[:3]] + [""] * (3 - len(have[:3]))
+    want_values = [want[1], want[3], want[5]]
+    active = run("nmcli", "-g", "GENERAL.CONNECTION", "device", "show", iface, check=False).stdout.strip()
+    if have == want_values and active == con:
+        return None
+    if have != want_values:
+        run("nmcli", "connection", "modify", con, *want)
+    what = f"{iface} " + (f"static {ip}/{prefix}" if mode == "static" else "DHCP")
+    r = run("nmcli", "connection", "up", con, check=False)
+    if r.returncode != 0:
+        # Saved; NetworkManager brings it up when the interface is (e.g. cable plugged in).
+        reason = ((r.stderr or r.stdout).strip().splitlines() or ["?"])[-1]
+        return f"{what} (saved, not active yet: {reason})"
+    return what
+
+
+def main():
+    if os.geteuid() != 0:
+        fail("owl-admin must run as root (sudo)")
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("reboot")
+    a = sub.add_parser("network")
+    a.add_argument("--hostname", required=True)
+    a.add_argument("--interface", required=True)
+    a.add_argument("--mode", choices=("dhcp", "static"), required=True)
+    a.add_argument("--ip", default="")
+    a.add_argument("--prefix", type=int, default=24)
+    a.add_argument("--gateway", default="")
+    args = ap.parse_args()
+    if args.cmd == "reboot":
+        print("rebooting", flush=True)
+        run("systemctl", "reboot")
+        return
+
+    if not LABEL.fullmatch(args.hostname):
+        fail("invalid hostname")
+    if not IFACE.fullmatch(args.interface) or not os.path.isdir(f"/sys/class/net/{args.interface}"):
+        fail(f"no network interface named {args.interface}")
+    if args.mode == "static":
+        try:
+            net = ipaddress.IPv4Interface(f"{args.ip}/{args.prefix}")
+            gw = ipaddress.IPv4Address(args.gateway) if args.gateway else None
+        except ValueError as e:
+            fail(f"invalid address: {e}")
+        if not 8 <= args.prefix <= 30 or (gw is not None and gw not in net.network):
+            fail("invalid netmask or gateway")
+
+    what = ["hostname " + args.hostname] if set_hostname(args.hostname) else []
+    ip = set_ip(args.interface, args.mode, args.ip, args.prefix, args.gateway)
+    what += [ip] if ip else []
+    print("applied " + ", ".join(what) if what else "already set")
+
+
+if __name__ == "__main__":
+    main()
