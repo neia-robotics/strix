@@ -134,6 +134,8 @@ Low exposure matters more than anything else for tag detection on a moving robot
 
 ## 4. Calibrate
 
+![Calibration in progress: the ChArUco board on a monitor, markers and corners outlined, with the capture panel on the right](../docs/images/owl-calibration.png)
+
 Calibrate from the settings page. A camera boots and streams without a calibration; it just doesn't publish poses (the header says **NOT CALIBRATED**) until it has one for its current resolution. Pick the resolution first: each resolution needs its own calibration.
 
 1. **Board.** The default is 6328's Northstar board (12×9 squares, 5×5 markers, 30/23 mm); a PhotonVision 8×8 preset is there too, or type in your own. **Print board** gives an image that prints at true size at 100% scale. The 6328 board is 360×270 mm, bigger than letter, so print it on 11×17 or show it full-screen on a flat monitor. Mount it flat; measure a square.
@@ -152,6 +154,10 @@ Tick **Wide-angle lens** before starting if your lens is wider than ~100° (Open
 - **tuning**: the chosen camera's stream with settings in three sub-tabs, **input** (resolution, exposure, gain), **apriltag** (detector and filters) and **output** (std dev factor, stream fps). Under the stream, click the pose line to open the **targets** table: every tag in the frame with yaw, pitch, skew, area, distance, decision margin, and whether it was used.
 - **calibration**: board setup, capture and results (below).
 - **coprocessor**: diagnostics: CPU per core, temperatures, memory, disk, uptime, IP addresses, the NetworkTables connection, every camera process (running, restarts, detector, fps) and software versions.
+
+![The cameras tab: one camera's stream, fps, detect time, pose and calibration state](../docs/images/owl-cameras.png)
+
+![The coprocessor tab on a Jetson: CPU per core, GPU load, temperatures, NetworkTables, and the camera process running "cuda on gpu"](../docs/images/owl-coprocessor.png)
 
 The header shows **camera fps** (what the camera delivers), **processed** fps, **pose fps**, detect time and calibration status for the chosen camera. The stream has two views: *Annotated* (green outlines for tags used in the pose, orange for filtered, red dot on corner 0, a 3D box on each tag once the camera is calibrated, and the pose or **the reason a frame was rejected**) and *Raw*.
 
@@ -281,7 +287,7 @@ Borrowed from 6328's Northstar handling.
 
 If detect time is near or above the frame period (20 ms at 50 fps), raise `quad_decimate` or lower the resolution. The grabber always processes the newest frame, so falling behind costs frame rate, not latency.
 
-**GPU detection (Jetson only, untested on hardware).** `"backend": "cuda"` in the `detector` section of config.json runs tag detection on the GPU with FRC 971's CUDA detector, through `libapriltag_gpu_capi.so` built from `native/gpu_detector` (see `native/gpu_detector/capi/README.md`). Put the `.so` in `owl/`, or point `detector.cuda_library` or `$APRILTAG_GPU_LIB` at it. The default, `"cpu"`, is WPILib's detector and needs none of this. On the GPU, decimation is always 2 (`quad_decimate` is ignored), `min_cluster_pixels` below 24 acts as 24, and a resolution that isn't a multiple of 8 is centre-cropped by up to 7 px (1600x1300 is detected as 1600x1296). If the library is missing, the resolution is unsupported (a side over 2048) or the detector errors, that camera logs why and carries on with the CPU detector; the stream overlay shows which one is running. Check a new build with `python3 test_synthetic.py --backend cuda`, which compares it to the CPU detector on the same frames.
+**GPU detection (Jetson only; validated on an Orin Nano with JetPack 6.2.1).** `"backend": "cuda"` in the `detector` section of config.json runs tag detection on the GPU with FRC 971's CUDA detector, through `libapriltag_gpu_capi.so` built from `native/gpu_detector` (see `native/gpu_detector/capi/README.md`). Put the `.so` in `owl/`, or point `detector.cuda_library` or `$APRILTAG_GPU_LIB` at it. The default, `"cpu"`, is WPILib's detector and needs none of this. On the GPU, decimation is always 2 (`quad_decimate` is ignored), `min_cluster_pixels` below 24 acts as 24, and a resolution that isn't a multiple of 8 is centre-cropped by up to 7 px (1600x1300 is detected as 1600x1296). If the library is missing, the resolution is unsupported (a side over 2048) or the detector errors, that camera logs why and carries on with the CPU detector; the stream overlay shows which one is running. Check a new build with `python3 test_synthetic.py --backend cuda`, which compares it to the CPU detector on the same frames.
 
 ## Not included (yet)
 
