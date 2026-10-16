@@ -1,12 +1,12 @@
-# apriltag_gpu_capi: detector-only shared library with a plain C API
+# apriltag_gpu_capi: the GPU tag detector as a C library
 
-*Part of Strix. Run the commands below from `native/gpu_detector/`.*
+This is the optional piece of Strix that lets Owl find AprilTags on a Jetson's GPU instead of its CPU. You only need it if you run Owl on a Jetson and set `"backend": "cuda"` in Owl's config. Run the commands below from `native/gpu_detector/`.
 
-`libapriltag_gpu_capi.so` wraps `frc971::apriltag::GpuDetector` (the FRC 971
-CUDA AprilTag detector in `../detector`) behind the small C interface declared in
-[include/apriltag_gpu_capi.h](include/apriltag_gpu_capi.h), so it can be
-loaded from a Python process through `ctypes` (or from anything else with a C
-FFI).  It contains nothing but the detector:
+`libapriltag_gpu_capi.so` wraps `frc971::apriltag::GpuDetector` (FRC 971's CUDA
+AprilTag detector, in `../detector`) behind the small C interface declared in
+[include/apriltag_gpu_capi.h](include/apriltag_gpu_capi.h). A plain C interface means
+Python can load it with `ctypes`, which is how Owl uses it, and so can anything else
+with a C FFI. The library contains only the detector:
 
 | In the library | Not in the library |
 | --- | --- |
@@ -19,75 +19,79 @@ core sources), `libstdc++`, `libm`, `libpthread`, `libdl`, `librt`, and the
 CUDA driver (`libcuda.so`, part of JetPack/L4T) which the static runtime loads
 on first use.
 
-The only exported symbols are `atgpu_*`.  Everything else, including every
-AprilTag C library function, is local to the library (hidden visibility plus a
-GNU ld version script, `src/atgpu_exports.map`), so loading it into a process
-that already has robotpy's `wpiutil`/`wpimath`/AprilTag libraries cannot
-produce duplicate-symbol clashes.  `test/check_exports.sh` verifies this.
+The only exported symbols are `atgpu_*`. Everything else, including every
+AprilTag C library function, is hidden inside the library (hidden visibility plus a
+GNU ld version script, `src/atgpu_exports.map`). That way, loading it into a process
+that already has RobotPy's `wpiutil`, `wpimath` and AprilTag libraries can't cause
+duplicate-symbol clashes. `test/check_exports.sh` checks this.
 
 ## Status
 
-The library has passed every check with the current C API (version 2) on the team's
-Jetson Orin Nano and on two other NVIDIA GPUs, x86 and ARM64. What has been verified:
+The library works on the team's Jetson Orin Nano. With the current C API (version 2) it has passed every check in `tools/validate_gpu.sh` there, and on two other NVIDIA GPUs, one x86 and one ARM64. Owl has also run with it on the Jetson, using an OV9281 camera. Still untested: the JetPack 5 build path (clang-17, below), and proper benchmarks of Owl on the CPU and GPU detectors with real cameras (on the [roadmap](../../../docs/roadmap.md)).
+
+The test runs, newest first:
 
 * **Jetson Orin Nano 8GB Super dev kit** (JetPack 6.2.1 / L4T R36.4.7, Ubuntu 22.04.5,
   CUDA 12.6 runtime and driver, nvcc 12.6, built for sm_87 only, Python 3.14 from uv,
-  C API version 2, October 2026): every check in `tools/validate_gpu.sh --skip-apt`
-  passed. `atgpu_device_info` reports Orin, compute capability 8.7, runtime 12.6 and
-  driver 12.6. Tags 554, none and 585 match WPILib within 0.013 px with margins 117.15
-  and 101.39 (WPILib: 117.13 and 101.42); GRAY8 and YUYV agree; every error path
-  returns a status without aborting.
-  Only `atgpu_*` is exported. The ctypes smoke test passes from the system Python 3.10,
-  from the validation venv, and with `robotpy_apriltag` loaded first. Owl's synthetic
-  test from Owl's own venv (`venv/bin/python test_synthetic.py --backend cuda
-  --cuda-library <path>`) gives the same GPU-vs-CPU result as the T4s: 277 shared tags,
-  corner difference median 0.001 px, max 0.154 px, one far tag only on CPU. Without
-  `--cuda-library` it fails on purpose with "fell back to the CPU detector", because
-  the `.so` is in none of the places Owl looks (`detector.cuda_library`,
-  `$APRILTAG_GPU_LIB`, next to `owl/`). Four 1280x800 detectors ran 15 s together at
-  12.0 ms median (p95 16.3 ms) each, and two 1600x1296 detectors at 10.6 ms median
-  (p95 17.0 ms) each, without errors. Shared RAM in use (tegrastats) went from 2472 MiB
-  idle to 3303 MiB peak. Single-process GRAY8 timing at 1280x800 was 8.7-8.8 ms per
-  frame. All timings were taken while Owl was running on the CPU backend with an
-  OV9281 and the camera was being calibrated, so they are numbers under load.
-  The Jetson benchmarks in `docs/roadmap.md` will measure them properly. No build
-  changes were needed.
+  C API version 2, October 2026). Every check in `tools/validate_gpu.sh --skip-apt`
+  passed, with no build changes needed.
+  * `atgpu_device_info` reports Orin, compute capability 8.7, runtime 12.6 and driver 12.6.
+  * Tags 554, none and 585 match WPILib to within 0.013 px, with decision margins 117.15
+    and 101.39 (WPILib: 117.13 and 101.42). GRAY8 and YUYV agree, and every error path
+    returns a status without aborting. Only `atgpu_*` is exported.
+  * The ctypes smoke test passes from the system Python 3.10, from the validation venv,
+    and with `robotpy_apriltag` loaded first.
+  * Owl's synthetic test, run from Owl's own venv (`venv/bin/python test_synthetic.py
+    --backend cuda --cuda-library <path>`), gives the same GPU-versus-CPU result as the
+    T4s: 277 shared tags, corner difference median 0.001 px and max 0.154 px, and one far
+    tag found only on the CPU. Without `--cuda-library` it fails on purpose with "fell
+    back to the CPU detector", because the `.so` wasn't in any of the places Owl looks
+    (`detector.cuda_library`, `$APRILTAG_GPU_LIB`, or next to `owl/`).
+  * Four 1280x800 detectors ran together for 15 s at 12.0 ms median (p95 16.3 ms) each,
+    and two 1600x1296 detectors at 10.6 ms median (p95 17.0 ms) each, without errors.
+    Shared RAM in use (from `tegrastats`) went from 2472 MiB idle to 3303 MiB peak. A
+    single process took 8.7 to 8.8 ms per 1280x800 GRAY8 frame.
+  * These timings were taken while Owl was running on the CPU backend with an OV9281
+    and the camera was being calibrated, so they are numbers under load, not clean
+    benchmarks.
 * **ARM64 with a GPU** (AWS EC2 `g5g.xlarge`: Graviton2 with an NVIDIA T4G / sm_75,
-  Ubuntu 22.04, CUDA 13.2, driver 595, Python 3.11, C API version 2, October 2026):
-  every check in `tools/validate_gpu.sh` passed. Detections, corner accuracy (within
-  0.013 px of WPILib), error paths, the ctypes smoke tests and Owl's GPU-vs-CPU
-  comparison (277 shared tags, corner difference median 0.001 px, max 0.154 px) match
+  Ubuntu 22.04, CUDA 13.2, driver 595, Python 3.11, C API version 2, October 2026).
+  Every check in `tools/validate_gpu.sh` passed. Detections, corner accuracy (within
+  0.013 px of WPILib), error paths, the ctypes smoke tests and Owl's GPU-versus-CPU
+  comparison (277 shared tags, corner difference median 0.001 px, max 0.154 px) matched
   the x86 run below. Four 1280x800 detectors and two 1600x1296 detectors ran together
-  without errors; GPU memory peaked at 1243 MiB. This is the closest stand-in for a
-  Jetson so far: an ARM host, Ubuntu 22.04 and the pinned ARM64 Python wheels.
+  without errors, and GPU memory peaked at 1243 MiB. Before the Jetson run, this was
+  the closest stand-in for a Jetson: an ARM host, Ubuntu 22.04 and the pinned ARM64
+  Python wheels.
 * **x86 with a GPU, C API version 2** (Google Colab, Tesla T4, Ubuntu 24.04, CUDA 13.0,
-  driver 580, October 2026): every check passed again after the fatal-error trap was
+  driver 580, October 2026). Every check passed again after the fatal-error trap was
   removed, with the same accuracy as the first run.
-* **First GPU run, C API version 1** (Google Colab, Tesla T4 / sm_75, Ubuntu 24.04, CUDA 13.0, driver
-  580, built for sm_75 and sm_87 with `tools/validate_gpu.sh`, October 2026): every
-  check passed. `atgpu_capi_test` finds tag 554, nothing, and tag 585 with corners
-  within 0.013 px of WPILib's detector and decision margins within 0.03; the GRAY8 and
-  YUYV paths agree; all error paths return a status without aborting. The ctypes smoke
-  test passes, including with `robotpy_apriltag` loaded first in the same process. Owl's
-  synthetic test against the CPU detector on 277 shared tags: corner difference median
-  0.001 px, max 0.154 px, one far tag found only by the CPU detector (the GPU treats
-  `min_cluster_pixels` below 24 as 24). Four processes each holding a 1280x800 detector
-  ran together for 15 s without errors; GPU memory peaked at 1243 MiB across the
-  multi-process runs. T4 timings (1280x800: 2.8 ms alone, 8.6-9.0 ms median each with
-  four processes sharing the GPU) don't predict Orin speed.
-* The CUDA build (`-DATGPU_BACKEND=cuda`, `CMAKE_CUDA_ARCHITECTURES=87`) compiles
-  and links in CI with nvcc 12.6 and CMake 3.26+ (in the `nvidia/cuda:12.6.3-devel-ubuntu22.04`
-  container, no GPU), and the result exports only `atgpu_*`.
-* `-DATGPU_BACKEND=cpu`, a host-only build of the same C layer over the
-  AprilTag fork's CPU detector (macOS with Apple clang and glog 0.7.1, and Ubuntu
-  24.04 in CI): builds, exports only `atgpu_*`, passes
-  `atgpu_capi_test` (reference detections match WPILib's detector within
-  0.02 px on the repo's test images), passes the ctypes smoke script, and the
-  isolated subprocess terminates on a simulated CHECK failure.
+* **First GPU run, C API version 1** (Google Colab, Tesla T4 / sm_75, Ubuntu 24.04,
+  CUDA 13.0, driver 580, built for sm_75 and sm_87 with `tools/validate_gpu.sh`,
+  October 2026). Every check passed.
+  * `atgpu_capi_test` finds tag 554, nothing, and tag 585, with corners within 0.013 px
+    of WPILib's detector and decision margins within 0.03. The GRAY8 and YUYV paths
+    agree, and all error paths return a status without aborting.
+  * The ctypes smoke test passes, including with `robotpy_apriltag` loaded first in the
+    same process.
+  * Owl's synthetic test against the CPU detector on 277 shared tags: corner difference
+    median 0.001 px, max 0.154 px, with one far tag found only by the CPU detector (the
+    GPU treats `min_cluster_pixels` below 24 as 24).
+  * Four processes, each holding a 1280x800 detector, ran together for 15 s without
+    errors. GPU memory peaked at 1243 MiB across the multi-process runs. The T4 timings
+    (1280x800: 2.8 ms alone, 8.6 to 9.0 ms median each with four processes sharing the
+    GPU) don't predict Orin speed.
+* **CUDA compile in CI.** The CUDA build (`-DATGPU_BACKEND=cuda`,
+  `CMAKE_CUDA_ARCHITECTURES=87`) compiles and links with nvcc 12.6 and CMake 3.26+ in
+  the `nvidia/cuda:12.6.3-devel-ubuntu22.04` container (no GPU), and the result exports
+  only `atgpu_*`.
+* **CPU backend.** `-DATGPU_BACKEND=cpu` builds the same C layer over the AprilTag
+  fork's CPU detector, with no CUDA (tested on macOS with Apple clang and glog 0.7.1,
+  and on Ubuntu 24.04 in CI). It builds, exports only `atgpu_*`, passes
+  `atgpu_capi_test` (detections match WPILib's detector to within 0.02 px on the repo's
+  test images) and the ctypes smoke script, and its isolated child process exits as
+  expected on a simulated CHECK failure.
 * The CMake logic for offline dependency resolution and for downloading.
-
-Still untested: JetPack 5 (the clang-17 path below), and Owl running the GPU backend
-with real cameras (the Jetson benchmarks in `docs/roadmap.md`).
 
 ## API in one screen
 
@@ -179,26 +183,34 @@ ignored.
 
 ### Error handling and process isolation
 
-Arguments are checked before entering the detector. Recoverable C++ exceptions
-become status codes and `atgpu_last_error()` messages. Native `CHECK` / `LOG(FATAL)`
-failures terminate the calling process. Do not attempt to resume a damaged CUDA
-context or jump across C++ stack frames. Run this library in an isolated worker.
+Arguments are checked before anything reaches the detector. Recoverable C++ exceptions
+become status codes with a message in `atgpu_last_error()`. A native `CHECK` or
+`LOG(FATAL)` failure inside the detector ends the whole calling process; there is no
+safe way to resume a damaged CUDA context or jump across C++ stack frames. So run this
+library in a separate worker process that can be allowed to die.
 
-Owl restarts crashed or stalled workers. Native crash signals trigger CPU fallback
-for that camera until Owl restarts, including failures during detector construction.
-Capture failures and watchdog restarts retain the configured backend. Its
-other cameras and NetworkTables publisher continue running. Legacy fatal/poisoned
-status numbers remain reserved for ABI compatibility but are no longer returned.
+Owl already does this: each camera runs in its own process, and Owl restarts any that
+crash or stall. If a camera's process dies from a native crash (including while the
+detector is being created), Owl restarts that camera on the CPU detector and keeps it
+there until Owl itself restarts. Capture failures and restarts for stalled cameras keep
+the configured backend. The other cameras and the NetworkTables publisher keep running
+throughout. The old fatal and poisoned status numbers from C API version 1 are still
+reserved so the ABI stays compatible, but they are no longer returned.
+
+C API version 2 exists because this crash behavior changed. Rebuild the library from
+this checkout; Owl rejects version 1 builds and uses the CPU detector instead.
 
 ## Building on a Jetson Orin Nano
 
-Both JetPack generations are covered. The JetPack 6 path has run on the team's
-Orin Nano (JetPack 6.2.1, see Status); the JetPack 5 path hasn't been exercised.
+There are instructions for both JetPack generations. The JetPack 6 path has run on
+the team's Orin Nano (JetPack 6.2.1, see Status); the JetPack 5 path hasn't been tried.
 
-On a Jetson, `nvcc` is in `/usr/local/cuda-12.6/bin` but not on `PATH`, and the
-image has no `libgoogle-glog-dev` / `libgflags-dev`. Install those two, then run
-`PATH=/usr/local/cuda-12.6/bin:$PATH bash tools/validate_gpu.sh --skip-apt` with a
-Python 3.11+ on `PATH`.
+The quickest route on JetPack 6 is the validation script, which builds the library and
+runs every check. On a stock Jetson image, `nvcc` is in `/usr/local/cuda-12.6/bin` but
+not on `PATH`, and `libgoogle-glog-dev` and `libgflags-dev` aren't installed. Install
+those two packages, then, with a Python 3.11 or newer on `PATH`, run
+`PATH=/usr/local/cuda-12.6/bin:$PATH bash tools/validate_gpu.sh --skip-apt` from the
+repo root. The steps below do the same build by hand.
 
 ### Packages (these need internet, or a pre-populated apt cache)
 
@@ -353,7 +365,3 @@ constructor and `Detect` signatures hold.
 | `test/smoke_ctypes.py` | ctypes smoke test and reference wrapper |
 | `test/check_exports.sh` | symbol export check |
 | `fetch_deps.sh` | pre-download CCCL + apriltag fork for offline builds |
-
-The native C API is now version 2 because fatal-error recovery semantics changed.
-Rebuild the optional GPU library with this checkout. Owl rejects older version-1
-libraries and runs on CPU, preventing reuse of the removed longjmp recovery path.

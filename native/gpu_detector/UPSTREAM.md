@@ -7,7 +7,7 @@
 | `testdata/` | Team 766's `data/` test images | `65366174d5e735bf6d71e34328b2a064e16bffb4` |
 
 Only the 7 `.cu` files the C API compiles, and the headers they include, were copied
-into `detector/`, unmodified. Team 766's NetworkTables senders, `ws_server`, installer,
+into `detector/`, and they are unmodified. Team 766's NetworkTables senders, `ws_server`, installer,
 Docker setup, calibration files and web viewer were left out.
 
 Changes made in Strix:
@@ -26,9 +26,10 @@ Licenses: the 971 code is Apache-2.0
 header). The AprilTag library (BSD-2-Clause) and NVIDIA CCCL (Apache-2.0 with LLVM
 exception) are downloaded at build time, not stored here. See `../../NOTICE.md`.
 
-## 2026-10-13 C API recovery change
+## C API recovery change (2026-10-13)
 
-Removed C API glog fatal trapping with siglongjmp. Fatal failures terminate the
-isolated worker; after a native crash signal, Owl's supervisor restarts that camera on CPU for the remainder
-of the supervisor lifetime. The vendored detector is unchanged. CPU tests exercise
-fatal termination in a child process. Legacy status numbers remain reserved.
+The C API no longer traps glog fatal errors with `siglongjmp`. A fatal error now ends
+the camera's worker process, and after a native crash Owl restarts that camera on the
+CPU detector until Owl itself restarts. The copied detector sources didn't change. The
+CPU tests check that a fatal error ends a child process. The old status numbers are
+still reserved.
