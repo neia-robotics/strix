@@ -8,7 +8,7 @@
 - The GPU detector's C API and the FRC 971 sources it needs are copied into the repo, with where they came from recorded in `native/gpu_detector/UPSTREAM.md`.
 - Tusk works on WPILib 2026 and 2027 in both languages. RobotPy and Java are tested against the same message bytes so they can't drift apart. See [wpilib-2027.md](wpilib-2027.md).
 - CI runs on every push: Owl, Tusk (both languages, both seasons), NetworkTables between seasons, the full Owl app with two simulated cameras, the GPU C API on the CPU, and a compile-only CUDA build for the Jetson's GPU (sm_87).
-- The October 2026 repository audit's findings are fixed. See [audit-repairs-2026-10-13.md](audit-repairs-2026-10-13.md).
+- The October 2026 [repository audit](repository-audit-2026-10-13.md)'s findings are fixed (commit `469b5b8`).
 - The GPU C API passed `tools/validate_gpu.sh` and the Jetson checklist on NEIA's Jetson Orin Nano (JetPack 6.2.1), after passing on a Colab T4 and an ARM64 AWS `g5g.xlarge`. Details are in [the GPU detector README](../native/gpu_detector/capi/README.md#status).
 - Owl runs on the Jetson with an OV9281 camera and the CUDA detector, and has fed NEIA's 2026 AdvantageKit robot code in simulation through `VisionIOTusk`.
 

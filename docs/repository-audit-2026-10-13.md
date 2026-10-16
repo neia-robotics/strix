@@ -1,6 +1,6 @@
 # Strix repository audit, October 13, 2026
 
-> This is a record of the repository as it was on October 13, 2026. Every finding below has since been fixed; see [audit-repairs-2026-10-13.md](audit-repairs-2026-10-13.md) for what changed.
+> This is a record of the repository as it was on October 13, 2026. Every finding below was fixed in commit `469b5b8`.
 
 Reviewed commit: `852d26c` (`Owl web page: NEIA x Choate redesign, tabs, targets table, diagnostics`). The checkout was clean at the start. This review adds documentation and an observation log; it does not modify application code or deploy anything.
 
