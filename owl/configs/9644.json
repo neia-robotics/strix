@@ -1,0 +1,65 @@
+{
+  "nt": {
+    "team": 9644,
+    "server": "192.168.2.28",
+    "client_name": "owl",
+    "standalone": false
+  },
+  "topic": "/Vision/observations",
+  "field": {
+    "layout": "k2026RebuiltWelded",
+    "tag_size_m": 0.1651
+  },
+  "detector": {
+    "family": "tag36h11",
+    "quad_decimate": 2.0,
+    "num_threads": 4,
+    "refine_edges": true,
+    "min_cluster_pixels": 20,
+    "backend": "cuda"
+  },
+  "filters": {
+    "max_hamming": 0,
+    "max_reprojection_error_px": 3.0,
+    "min_decision_margin": 25.0,
+    "max_single_tag_ambiguity": 0.4,
+    "max_tag_distance_m": 6.0,
+    "field_border_margin_m": 0.5,
+    "max_z_error_m": 0.75
+  },
+  "stream": {
+    "enabled": true,
+    "base_port": 1181,
+    "max_fps": 30.0,
+    "jpeg_quality": 80
+  },
+  "calibration_board": {
+    "squares_x": 8,
+    "squares_y": 8,
+    "square_length_m": 0.0381,
+    "marker_length_m": 0.0286,
+    "dict": "DICT_4X4_1000",
+    "legacy": false
+  },
+  "cameras": [
+    {
+      "name": "front",
+      "device": "/dev/v4l/by-path/platform-3610000.usb-usb-0:2.4:1.0-video-index0",
+      "width": 1280,
+      "height": 800,
+      "fps": 100,
+      "fourcc": "MJPG",
+      "robot_to_camera": {
+        "x": 0,
+        "y": 0,
+        "z": 0,
+        "roll_deg": 0,
+        "pitch_deg": 0,
+        "yaw_deg": 0
+      },
+      "std_dev_factor": 1.0,
+      "exposure": null,
+      "gain": null
+    }
+  ]
+}

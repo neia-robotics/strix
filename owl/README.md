@@ -34,6 +34,7 @@ owl/                      copy this folder to the coprocessor
   calibrate.py            ChArUco calibration from a terminal (alternative to the web page)
   config.example.json     start here: cp config.example.json config.json
   configs/7407.json       Choate's tuned config (copy to config.json on their Pi)
+  configs/9644.json       NEIA's Jetson config (CUDA detector, one OV9281)
   calibrations/           <camera>_<W>x<H>.json, one per camera per resolution (not in git)
 ../deploy/owl.service     systemd service that starts Owl on boot
 ../deploy/owl-admin       root helper for hostname, IP and reboot (optional; see section 6)

@@ -110,7 +110,7 @@ If your robot uses the AdvantageKit vision template, use [tusk/java/examples/Vis
 | Path | What's there |
 | --- | --- |
 | `owl/` | The coprocessor app (Python, RobotPy 2026 libraries) |
-| `owl/configs/` | Tuned configs for each robot (`7407.json` is Choate's) |
+| `owl/configs/` | Tuned configs for each robot: `7407.json` is Choate's Orange Pi, `9644.json` is NEIA's Jetson |
 | `tusk/robotpy/` | Robot side for RobotPy, with tests and Choate's 7407 example |
 | `tusk/java/` | Robot side for Java, built for 2026 or 2027 |
 | `tusk/testdata/` | Sample message bytes that both Tusk versions are tested against |
