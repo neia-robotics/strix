@@ -27,9 +27,31 @@ produce duplicate-symbol clashes.  `test/check_exports.sh` verifies this.
 
 ## Status
 
-The library has passed every check on two NVIDIA GPUs, x86 and ARM64, with the current
-C API (version 2). It hasn't run on a Jetson yet. What has been verified:
+The library has passed every check with the current C API (version 2) on the team's
+Jetson Orin Nano and on two other NVIDIA GPUs, x86 and ARM64. What has been verified:
 
+* **Jetson Orin Nano 8GB Super dev kit** (JetPack 6.2.1 / L4T R36.4.7, Ubuntu 22.04.5,
+  CUDA 12.6 runtime and driver, nvcc 12.6, built for sm_87 only, Python 3.14 from uv,
+  C API version 2, October 2026): every check in `tools/validate_gpu.sh --skip-apt`
+  passed. `atgpu_device_info` reports Orin, compute capability 8.7, runtime 12.6 and
+  driver 12.6. Tags 554, none and 585 match WPILib within 0.013 px with margins 117.15
+  and 101.39 (WPILib: 117.13 and 101.42); GRAY8 and YUYV agree; every error path
+  returns a status without aborting.
+  Only `atgpu_*` is exported. The ctypes smoke test passes from the system Python 3.10,
+  from the validation venv, and with `robotpy_apriltag` loaded first. Owl's synthetic
+  test from Owl's own venv (`venv/bin/python test_synthetic.py --backend cuda
+  --cuda-library <path>`) gives the same GPU-vs-CPU result as the T4s: 277 shared tags,
+  corner difference median 0.001 px, max 0.154 px, one far tag only on CPU. Without
+  `--cuda-library` it fails on purpose with "fell back to the CPU detector", because
+  the `.so` is in none of the places Owl looks (`detector.cuda_library`,
+  `$APRILTAG_GPU_LIB`, next to `owl/`). Four 1280x800 detectors ran 15 s together at
+  12.0 ms median (p95 16.3 ms) each, and two 1600x1296 detectors at 10.6 ms median
+  (p95 17.0 ms) each, without errors. Shared RAM in use (tegrastats) went from 2472 MiB
+  idle to 3303 MiB peak. Single-process GRAY8 timing at 1280x800 was 8.7-8.8 ms per
+  frame. All timings were taken while Owl was running on the CPU backend with an
+  OV9281 and the camera was being calibrated, so they are numbers under load.
+  The Jetson benchmarks in `docs/roadmap.md` will measure them properly. No build
+  changes were needed.
 * **ARM64 with a GPU** (AWS EC2 `g5g.xlarge`: Graviton2 with an NVIDIA T4G / sm_75,
   Ubuntu 22.04, CUDA 13.2, driver 595, Python 3.11, C API version 2, October 2026):
   every check in `tools/validate_gpu.sh` passed. Detections, corner accuracy (within
@@ -64,9 +86,8 @@ C API (version 2). It hasn't run on a Jetson yet. What has been verified:
   isolated subprocess terminates on a simulated CHECK failure.
 * The CMake logic for offline dependency resolution and for downloading.
 
-Still untested: a Jetson. That means the Orin's GPU (sm_87 has only been compiled, never
-run), JetPack 6's CUDA 12 at runtime, the Jetson's shared CPU/GPU memory, and the Jetson
-instructions below. See "First checks on the Jetson".
+Still untested: JetPack 5 (the clang-17 path below), and Owl running the GPU backend
+with real cameras (the Jetson benchmarks in `docs/roadmap.md`).
 
 ## API in one screen
 
@@ -171,8 +192,13 @@ status numbers remain reserved for ABI compatibility but are no longer returned.
 
 ## Building on a Jetson Orin Nano
 
-Both JetPack generations are covered; which one the Jetson will run is still
-open.  Neither path has been exercised yet.
+Both JetPack generations are covered. The JetPack 6 path has run on the team's
+Orin Nano (JetPack 6.2.1, see Status); the JetPack 5 path hasn't been exercised.
+
+On a Jetson, `nvcc` is in `/usr/local/cuda-12.6/bin` but not on `PATH`, and the
+image has no `libgoogle-glog-dev` / `libgflags-dev`. Install those two, then run
+`PATH=/usr/local/cuda-12.6/bin:$PATH bash tools/validate_gpu.sh --skip-apt` with a
+Python 3.11+ on `PATH`.
 
 ### Packages (these need internet, or a pre-populated apt cache)
 
