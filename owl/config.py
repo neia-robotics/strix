@@ -11,11 +11,14 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 from dataclasses import dataclass, field
 
 import numpy as np
 from validation import validate_settings, setting, number
 
+from network import DEFAULT_NETWORK, validate_network
+from pipelines import defaults as pipeline_defaults, load_camera_pipelines
 from pose_solver import DetectorSettings, SolverSettings
 
 # OV2311 full sensor (16:13). Used when a camera in config.json has no width/height.
@@ -49,6 +52,11 @@ class CameraConfig:
     gain: float | None = None
     loop_video: bool = False  # for testing with a video file instead of a camera
     stream_port: int = 1181
+    config_path: str = ""  # for the page's maintenance buttons (admin.py)
+    # Named settings sets (pipelines.py). width/height/exposure/gain/std_dev_factor above
+    # are the default pipeline's, which the camera boots into.
+    pipelines: list = field(default_factory=list)
+    pipeline: str = "default"
 
 
 @dataclass
@@ -65,6 +73,7 @@ class AppConfig:
     path: str = ""
     cameras: list[CameraConfig] = field(default_factory=list)
     calibration_board: dict = field(default_factory=lambda: dict(DEFAULT_BOARD))
+    network: dict = field(default_factory=lambda: dict(DEFAULT_NETWORK))  # hostname/IP (network.py)
 
 
 def _find(d: dict, *keys):
@@ -132,6 +141,17 @@ def find_calibration(cam: CameraConfig, width: int, height: int) -> dict | None:
     return None
 
 
+def write_config(path: str, raw: dict) -> None:
+    """Atomic write: a power cut mid-save leaves either the old or the new file, never half."""
+    fd, tmp = tempfile.mkstemp(prefix=".config-", suffix=".json", dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as f:
+        json.dump(raw, f, indent=2)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def load_config(path: str) -> AppConfig:
     with open(path) as f:
         raw = json.load(f)
@@ -171,6 +191,7 @@ def load_config(path: str) -> AppConfig:
                 gain=c.get("gain"),
                 loop_video=c.get("loop_video", False),
                 stream_port=int(stream["base_port"]) + i,
+                config_path=os.path.abspath(path),
             )
         )
     if len({c.name for c in cams}) != len(cams):
@@ -202,6 +223,17 @@ def load_config(path: str) -> AppConfig:
         for key in ("x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"):
             number(key, cam.robot_to_camera.get(key, 0), -10000, 10000)
 
+    for cam, c in zip(cams, raw["cameras"]):
+        base = pipeline_defaults(cam.width, cam.height, det, solver, exposure=cam.exposure, gain=cam.gain,
+                                 std_dev_factor=cam.std_dev_factor)
+        try:
+            cam.pipelines, cam.pipeline = load_camera_pipelines(c, base)
+        except ValueError as e:
+            raise ValueError(f"camera {cam.name}: {e}") from None
+        boot = next(p for p in cam.pipelines if p["name"] == cam.pipeline)
+        cam.width, cam.height = (int(x) for x in boot["resolution"].split("x"))
+        cam.exposure, cam.gain, cam.std_dev_factor = boot["exposure"], boot["gain"], boot["std_dev_factor"]
+
     return AppConfig(
         team=nt.get("team"),
         server=nt.get("server"),
@@ -215,6 +247,7 @@ def load_config(path: str) -> AppConfig:
         path=os.path.abspath(path),
         cameras=cams,
         calibration_board=board,
+        network=validate_network(raw.get("network", {})),
     )
 
 

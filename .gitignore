@@ -20,6 +20,10 @@ native/gpu_detector/capi/deps/
 
 # Owl: per-coprocessor files
 owl/config.json
+owl/config.json.bak*
+owl/backups/
+owl/.owl-admin.lock
+owl/*.so
 owl/wheels/
 owl/calibrations/
 owl/camera_*.jpg

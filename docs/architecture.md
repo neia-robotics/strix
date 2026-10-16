@@ -45,7 +45,10 @@ Teams with their own vision subsystem can use `TuskSource` alone (see `tusk/java
 | `/Vision/heartbeat` | Owl → robot | int, increments once a second |
 | `/Vision/throttleFps` | robot → Owl | double, -1 = no limit |
 | `/Vision/cameras/<name>/*` | Owl → dashboards | fps, processMs, lastReject, robotPose, … |
-| `/Vision/settings/*` | both | live tuning |
+| `/Vision/cameras/<name>/settings/*` | both | live tuning of the camera's active pipeline |
+| `/Vision/cameras/<name>/pipelineRequest` | robot → Owl | string, pipeline name to switch to |
+| `/Vision/cameras/<name>/pipelineState` | Owl → robot | string, active pipeline name |
+| `/Vision/settings/*` | both | shared settings (stream fps, calibration board), save |
 
 The struct name carries a version. When fields change, bump the name (`V4`), change `owl/vision_types.py`, `tusk/robotpy/tusk/vision_types.py` and `tusk/java/.../VisionObservation.java` together, regenerate `tusk/testdata` (`python tusk/robotpy/tests/test_vision_types.py --write-fixture`), and deploy Owl and robot code together. A mismatched pair gets no data instead of misreading each other's bytes.
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import math
 import multiprocessing as mp
 import os
@@ -25,7 +26,8 @@ import socket
 import threading
 import time
 
-from config import load_config
+from config import load_config, write_config
+from network import apply_system, ethernet_interfaces, nt_target_text, parse_nt_target, system_support, validate_network
 from recovery import needs_restart, needs_cpu_fallback
 
 
@@ -50,18 +52,24 @@ def local_ips() -> list[str]:
 
 
 class IpWatcher:
-    """Refreshes local_ips() in a background thread so the publishing loop never waits on it."""
+    """Refreshes local_ips() (and the wired interfaces for the networking page) in a
+    background thread so the publishing loop never waits on it."""
 
     def __init__(self, period_s: float = 5.0):
-        self.ips = local_ips()
+        self._refresh()
         self._period = period_s
         threading.Thread(target=self._run, name="ip-watcher", daemon=True).start()
+
+    def _refresh(self):
+        self.ips = local_ips()
+        self.interfaces = ethernet_interfaces()
+        self.support = system_support()
 
     def _run(self):
         while True:
             time.sleep(self._period)
             try:
-                self.ips = local_ips()
+                self._refresh()
             except Exception:
                 pass
 
@@ -100,18 +108,31 @@ def main():
     # Every camera's page lists all cameras so one page can switch between them.
     peers = [{"name": c.name, "port": c.stream_port} for c in cfg.cameras]
 
+    settings = None  # LiveSettings, once NT is up; until then cameras start in their default pipeline
+
     def start(cam):
+        """Starts a camera process in its active pipeline (on a restart, whatever was switched to)."""
+        pipe = (settings.pipes[cam.id][settings.active[cam.id]] if settings is not None
+                else next(p for p in cam.pipelines if p["name"] == cam.pipeline))
+        w, h = (int(x) for x in pipe["resolution"].split("x"))
+        cam = dataclasses.replace(cam, width=w, height=h, exposure=pipe["exposure"], gain=pipe["gain"],
+                                  std_dev_factor=pipe["std_dev_factor"])
         old = ctrls.get(cam.id)
         if old is not None:
             old.cancel_join_thread()
             old.close()
         ctrls[cam.id] = ctx.Queue(maxsize=4)
         pending_controls[cam.id] = {}
-        detector = dataclasses.replace(cfg.detector, backend="cpu") if cam.id in cpu_only else cfg.detector
+        detector = dataclasses.replace(cfg.detector, quad_decimate=pipe["quad_decimate"],
+                                       min_cluster_pixels=pipe["min_cluster_pixels"])
+        if cam.id in cpu_only:
+            detector = dataclasses.replace(detector, backend="cpu")
+        solver = dataclasses.replace(cfg.solver, **{k: pipe[k] for k in (
+            "min_decision_margin", "max_single_tag_ambiguity", "max_reprojection_error_px", "max_tag_distance_m")})
         last_seen[cam.id] = time.monotonic()
         reported.discard(cam.id)
         p = ctx.Process(target=run_camera, name=cam.name, daemon=True,
-                        args=(cam, cfg.field_layout, detector, cfg.solver, cfg.stream,
+                        args=(cam, cfg.field_layout, detector, solver, cfg.stream,
                               q, ctrls[cam.id], peers))
         p.start()
         procs[cam.id] = p
@@ -138,18 +159,28 @@ def main():
     from vision_types import VisionObservation
 
     inst = ntcore.NetworkTableInstance.getDefault()
-    if cfg.standalone:
-        inst.startServer("networktables.json", "", 0, args.nt_port)
-        print("NT: running standalone server", flush=True)
-    else:
+
+    def nt_target():
+        return cfg.server or (f"team {cfg.team}" if cfg.team is not None else None)
+
+    def start_nt():
+        """(Re)starts NT from cfg. Publishers and listeners carry over a restart."""
+        inst.stopServer()
+        inst.stopClient()
+        if cfg.standalone:
+            inst.startServer("networktables.json", "", 0, args.nt_port)
+            print("NT: running standalone server", flush=True)
+            return
         inst.startClient4(cfg.client_name)
         if cfg.server:
             inst.setServer(cfg.server, args.nt_port)
         elif cfg.team is not None:
             inst.setServerTeam(cfg.team)
-        else:
-            raise SystemExit("config needs nt.team or nt.server (or use --standalone)")
-        print(f"NT: client -> {cfg.server or f'team {cfg.team}'}", flush=True)
+        # No target: keep running so the target can be set from the coprocessor page.
+        print(f"NT: client -> {nt_target()}" if nt_target() else
+              "NT: no team number or server address; set one on the coprocessor page", flush=True)
+
+    start_nt()
 
     # The Pi has no real-time clock or internet, so its own timestamps are meaningless.
     # NT keeps the offset to the robot's clock, so log lines carry the robot's time
@@ -212,11 +243,64 @@ def main():
                 t.getStringTopic("source").publish().set(f"vision:{cam.name}")
     last_ips = None
     ip_watcher = IpWatcher()
+    net_apply = {"status": "", "error": False, "busy": False}  # hostname/IP helper, off the main loop
+
+    def apply_network_in_background(net):
+        net_apply.update(status="applying hostname and IP…", error=False, busy=True)
+
+        def run():
+            time.sleep(1.0)  # let the page's request finish first: its address may be about to change
+            try:
+                net_apply.update(status=apply_system(net), error=False)
+            except RuntimeError as e:
+                net_apply.update(status=f"hostname/IP not applied: {e}", error=True)
+            net_apply["busy"] = False
+            print(f"network: {net_apply['status']}", flush=True)
+
+        threading.Thread(target=run, name="network-apply", daemon=True).start()
+
+    def set_network(data):
+        """Save from the coprocessor page. The NT target applies now; hostname and IP go
+        through the root helper when "manage" is on. Returns (ok, status)."""
+        try:
+            team, server = parse_nt_target(data.get("nt_server"))
+            standalone = data.get("standalone")
+            if not isinstance(standalone, bool):
+                raise ValueError("standalone must be true or false")
+            if not standalone and team is None and server is None:
+                raise ValueError("set a team number or NetworkTables server address")
+            net = validate_network(data.get("network", {}))
+            if net["manage"] and net_apply["busy"]:
+                raise ValueError("still applying the last hostname/IP change")
+        except (TypeError, ValueError) as e:
+            return False, f"not saved: {e}"
+        try:
+            with open(cfg.path) as f:
+                raw = json.load(f)
+            raw.setdefault("nt", {}).update(team=team, server=server, standalone=standalone)
+            raw["network"] = net
+            write_config(cfg.path, raw)
+        except (OSError, ValueError) as e:
+            return False, f"save failed: {e}"
+        if (team, server, standalone) != (cfg.team, cfg.server, cfg.standalone):
+            cfg.team, cfg.server, cfg.standalone = team, server, standalone
+            start_nt()
+        cfg.network = net
+        print(f"network: saved -> {cfg.path}", flush=True)
+        if net["manage"]:
+            apply_network_in_background(net)
+            return True, "saved; applying hostname and IP…"
+        net_apply.update(status="", error=False)
+        return True, f"saved {time.strftime('%H:%M:%S')}"
 
     def shutdown(*_):
         for p in procs.values():
             p.terminate()
+        for p in procs.values():  # let each camera release its device (a killed one can wedge it)
+            p.join(timeout=2)
         os._exit(0)
+
+    restart_at = [None]  # "restart software": exit and let systemd's Restart=always start us again
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
@@ -257,6 +341,23 @@ def main():
         elif msg[0] == "set":  # from a camera's web settings page
             ok = settings.set_from_web(msg[1], msg[2])
             send_control(msg[1], {"_acks": [{"id": msg[3], "ok": ok, "status": settings.status_text}]})
+        elif msg[0] == "restart":  # from the coprocessor page
+            # systemd sets INVOCATION_ID for a service; without one, nothing would start Owl again.
+            ok = bool(os.environ.get("INVOCATION_ID"))
+            if ok:
+                restart_at[0] = time.monotonic() + 1.0  # after the page gets its answer
+                print("restart requested from the coprocessor page", flush=True)
+            send_control(msg[1], {"_acks": [{"id": msg[3], "ok": ok, "status": "restarting Owl…" if ok else
+                "Owl isn't running as a systemd service, so it can't restart itself; restart it by hand"}]})
+        elif msg[0] == "pipeline":  # from a camera's tuning page
+            try:
+                ok, status = True, settings.pipeline_op(msg[1], msg[2])
+            except ValueError as e:
+                ok, status = False, str(e)
+            send_control(msg[1], {"_acks": [{"id": msg[3], "ok": ok, "status": status}]})
+        elif msg[0] == "network":  # from the coprocessor page
+            ok, status = set_network(msg[2] or {})
+            send_control(msg[1], {"_acks": [{"id": msg[3], "ok": ok, "status": status}]})
         elif msg[0] == "save":
             settings.request_save()
             save_replies.append((msg[1], msg[3]))
@@ -353,12 +454,20 @@ def main():
                 "ips": ips,
                 "nt": {
                     "mode": "standalone server" if cfg.standalone else "client",
-                    "target": None if cfg.standalone else (cfg.server or f"team {cfg.team}"),
+                    "target": None if cfg.standalone else (nt_target() or "not set"),
                     "connected": bool(inst.isConnected()) or cfg.standalone,
                     "peers": [{"id": c.remote_id, "ip": c.remote_ip} for c in inst.getConnections()],
                     "time_synced": time_synced[0],
                 },
                 "throttle_fps": throttle,
+                "network": {  # the coprocessor page's networking form
+                    "nt_server": nt_target_text(cfg.team, cfg.server),
+                    "standalone": cfg.standalone,
+                    "settings": cfg.network,
+                    "interfaces": ip_watcher.interfaces,
+                    "unsupported": ip_watcher.support,
+                    **net_apply,
+                },
                 "cameras": [{"name": c.name, "port": c.stream_port, "alive": procs[c.id].is_alive(),
                              "cpu_fallback": c.id in cpu_only, "pid": procs[c.id].pid, "restarts": restarts[c.id]} for c in cfg.cameras],
             }
@@ -370,6 +479,8 @@ def main():
                     port = cfg.cameras[cam_id].stream_port
                     pub.set([f"mjpg:http://{ip}:{port}/{path}" for ip in ips])
 
+        if restart_at[0] is not None and time.monotonic() >= restart_at[0]:
+            shutdown()
         t_end = time.monotonic()
         if t_end - t_loop > STALL_WARN_S and t_end - last_stall_print > 5.0:
             last_stall_print = t_end

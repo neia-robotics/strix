@@ -151,9 +151,9 @@ Tick **Wide-angle lens** before starting if your lens is wider than ~100° (Open
 **The page.** `http://<pi-ip>:1181/` (any camera's port works). It has four tabs, and the URL remembers the tab and camera (`#page=tuning&cam=<name>`):
 
 - **cameras**: every camera at once, each with its live stream, fps, pose or reject reason, and calibration state.
-- **tuning**: the chosen camera's stream with settings in three sub-tabs, **input** (resolution, exposure, gain), **apriltag** (detector and filters) and **output** (std dev factor, stream fps). Under the stream, click the pose line to open the **targets** table: every tag in the frame with yaw, pitch, skew, area, distance, decision margin, and whether it was used.
+- **tuning**: the chosen camera's stream, its **pipeline** (see Pipelines below), and settings in three sub-tabs, **input** (resolution, exposure, gain), **apriltag** (detector and filters) and **output** (std dev factor, stream fps). Under the stream, click the pose line to open the **targets** table: every tag in the frame with yaw, pitch, skew, area, distance, decision margin, and whether it was used.
 - **calibration**: board setup, capture and results (below).
-- **coprocessor**: diagnostics: CPU per core, temperatures, memory, disk, uptime, IP addresses, the NetworkTables connection, every camera process (running, restarts, detector, fps) and software versions.
+- **coprocessor**: diagnostics (CPU per core, temperatures, memory, disk, uptime, IP addresses, the NetworkTables connection, every camera process and software versions), plus **networking** and **maintenance** (see section 6).
 
 ![The cameras tab: one camera's stream, fps, detect time, pose and calibration state](../docs/images/owl-cameras.png)
 
@@ -166,17 +166,25 @@ Streams are full resolution and only encode while someone is watching, so an unw
 **Live tuning.** Every setting applies within about 0.1 s, from the page, Elastic or AdvantageScope; they all edit the same NT entries:
 
 ```
-/Vision/settings/quad_decimate, min_cluster_pixels            detector
-/Vision/settings/min_decision_margin, max_single_tag_ambiguity,
-                 max_tag_distance_m                           filters
+/Vision/cameras/<name>/settings/resolution, exposure, gain, std_dev_factor     camera
+/Vision/cameras/<name>/settings/quad_decimate, min_cluster_pixels              detector
+/Vision/cameras/<name>/settings/min_decision_margin, max_single_tag_ambiguity,
+                                max_reprojection_error_px, max_tag_distance_m   filters
 /Vision/settings/stream_max_fps
-/Vision/settings/board_*                                      calibration board
-/Vision/cameras/<name>/settings/exposure, gain, std_dev_factor, resolution
+/Vision/settings/board_*                                                         calibration board
 ```
 
-Camera settings apply to that camera only; the rest apply to all cameras. For exposure and gain, **-1 means auto** (NT has no null). Exposure uses the camera's native units (often 100 µs steps; the page reads the range from the camera).
+The per-camera settings belong to that camera's active pipeline; the two `/Vision/settings` groups apply to all cameras. For exposure and gain, **-1 means auto** (NT has no null). Exposure uses the camera's native units (often 100 µs steps; the page reads the range from the camera).
 
 **Saving.** Changes apply immediately but are **not** saved until you press **Save settings** (or set `/Vision/settings/save` true). The Pi writes `config.json` atomically, so a power cut mid-save can't corrupt it. On startup `config.json` always wins, so unsaved experiments vanish on restart. After a tuning session, pull the Pi's `config.json` into the repo.
+
+**Pipelines.** Each camera has one or more named pipelines, like PhotonVision's. A pipeline holds every per-camera setting above: resolution, exposure, gain, std dev factor, detector and filters. Editing a setting edits the active pipeline. The bar above the tuning tabs switches pipelines and has buttons to add one (default settings), duplicate, rename, make it the default (★), and delete (a camera always keeps one). Like settings, pipeline changes apply at once but aren't written to `config.json` until you press **Save settings**.
+
+Switching applies only the values that differ. Pipelines at the same resolution switch at once; a different resolution reopens the camera (a second or so on USB cameras) and uses that resolution's calibration, so calibrate each resolution you use. The cameras tab shows the active pipeline once a camera has more than one.
+
+The robot switches by name: write it to `/Vision/cameras/<name>/pipelineRequest`, and `/Vision/cameras/<name>/pipelineState` reports the active one (`/Vision/cameras/<name>/pipelines` lists them all). Names don't shift when a pipeline is deleted, unlike PhotonVision's indices. Owl acts on a request when its value changes, so a switch on the page isn't undone by an old request, and an unknown name is ignored. A switch from the robot lasts until Owl restarts; each camera starts in its default pipeline, which only changes from the page. Observations don't say which pipeline produced them, so read `pipelineState` if the robot needs to know.
+
+In `config.json`, a camera's pipelines are a `pipelines` list plus `pipeline`, the default's name. Settings a pipeline leaves out come from the camera's own fields and the shared `detector`/`filters` sections. A camera without `pipelines` gets one named `default`, so older configs load unchanged. On save, the camera's `width`, `height`, `exposure`, `gain` and `std_dev_factor` mirror its default pipeline.
 
 NT status per camera is under `/Vision/cameras/<name>/`: `fps`, `processMs`, `tagFps`, `connected`, `lastReject`, and `robotPose` (a plain Pose3d you can drag onto AdvantageScope's field view). The robot reads `/Vision/observations`.
 
@@ -190,6 +198,33 @@ sudo systemctl daemon-reload && sudo systemctl enable --now owl
 ```
 
 After editing the installed service, run `daemon-reload` and restart.
+
+**Networking from the page.** The coprocessor tab sets the NetworkTables target (a team number, or a server IP or hostname) and the standalone bench-test server. Both take effect as soon as you press **Save networking**, without a restart, and are saved to `config.json`'s `nt` section. If neither a target nor standalone is set, Owl keeps running and the page shows a warning.
+
+Turn on **manage hostname and IP address** to set this coprocessor's hostname and its wired interface's IP (DHCP, or static with a netmask and optional gateway). Choosing static with a team number filled in suggests `10.TE.AM.11`. Owl applies these through NetworkManager on a connection of its own, `owl-<interface>`. The original connection stays as it was, so deleting `owl-<interface>` (`sudo nmcli connection delete owl-eth0`) goes back to it. Changes are applied only when you save, and `config.json`'s `network` section records what was last applied. A new hostname or IP moves the page, which then links to the new address.
+
+**Maintenance buttons.** Also on the coprocessor tab:
+
+- **View logs / download logs**: Owl's journal (`journalctl -u owl`). The service user needs to be in the `adm` or `systemd-journal` group.
+- **Export settings**: a zip of `config.json` and `calibrations/`.
+- **Import settings**: takes an exported zip, or a bare `config.json`. The config must load before anything is replaced. Calibrations in the zip are added, overwriting any with the same name.
+- **Restart owl**: Owl exits cleanly (each camera releases its device), and systemd's `Restart=always` starts it again. This only works when Owl runs as a service.
+- **Reboot coprocessor**: needs the admin helper (below).
+- **Factory reset**: resets every setting to `config.example.json`'s defaults. It keeps what Owl needs to start (each camera's name, device, mode and mounting position, plus the NT target) and removes the calibrations.
+
+Import and factory reset first copy `config.json` and `calibrations/` into `backups/<time>-<what>/`, then restart Owl. To undo one, copy that folder back.
+
+**Admin helper.** Hostname, IP and reboot need root, and Owl doesn't run as root. They go through `../deploy/owl-admin`, a small script that Owl runs with `sudo -n`. Install it root-owned, outside the repo (it imports nothing from the Owl checkout, which the service user can write to), and allow only it in sudoers. Replace `strix` with the service's user:
+
+```bash
+sudo install -o root -g root -m 755 deploy/owl-admin /usr/local/sbin/owl-admin
+echo 'strix ALL=(root) NOPASSWD: /usr/local/sbin/owl-admin' | sudo tee /etc/sudoers.d/owl-admin
+sudo chmod 440 /etc/sudoers.d/owl-admin && sudo visudo -c
+```
+
+Reinstall it after updating `deploy/owl-admin`. Without it, everything else on the page still works, and the networking card says why hostname and IP are unavailable.
+
+The page has no login: anyone on the robot network can use these buttons, just like the tuning settings.
 
 ## 7. Robot side
 
