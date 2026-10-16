@@ -139,7 +139,13 @@ step "Owl synthetic test, GPU vs CPU detector" owl_synthetic
 MEMLOG="$OUT/gpu_memory_mib.txt"
 : > "$MEMLOG"
 SAMPLER=""
-if command -v nvidia-smi >/dev/null; then
+MEMWHAT="gpu memory used"
+if command -v tegrastats >/dev/null; then
+  # Jetson: nvidia-smi reports memory as [N/A]; GPU and CPU share RAM, so log total RAM in use.
+  MEMWHAT="shared RAM used (tegrastats)"
+  tegrastats --interval 250 2>/dev/null | stdbuf -oL sed -n 's/.*RAM \([0-9]*\)\/.*/\1/p' > "$MEMLOG" &
+  SAMPLER=$!
+elif command -v nvidia-smi >/dev/null; then
   nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 250 > "$MEMLOG" 2>/dev/null &
   SAMPLER=$!
 fi
@@ -149,6 +155,7 @@ step "2 processes x 1600x1296 detectors (OV2311 full sensor)" \
   "$VPY" "$ROOT/tools/gpu_multiproc.py" "$LIB" --procs 2 --seconds 10 --width 1600 --height 1296
 if [ -n "$SAMPLER" ]; then
   kill "$SAMPLER" 2>/dev/null; wait "$SAMPLER" 2>/dev/null
+  pkill -u "$(id -u)" -x tegrastats 2>/dev/null || true
 fi
 
 # ---- summary ---------------------------------------------------------------
@@ -161,7 +168,7 @@ fi
   fi
   echo "nvcc: $("$NVCC" --version | grep -o 'release [0-9.]*')   cuda archs: $ARCHS"
   if [ -s "$MEMLOG" ]; then
-    echo "gpu memory used: idle $(head -1 "$MEMLOG") MiB, peak $(sort -n "$MEMLOG" | tail -1) MiB"
+    echo "$MEMWHAT: idle $(head -1 "$MEMLOG") MiB, peak $(sort -n "$MEMLOG" | tail -1) MiB"
   fi
   printf '%s\n' "${RESULTS[@]}"
 } | tee "$OUT/summary.txt"

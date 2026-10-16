@@ -8,16 +8,16 @@
 - The GPU detector's C API and the 971 sources it needs are vendored, with provenance in `native/gpu_detector/UPSTREAM.md`.
 - Tusk works on WPILib 2026 and 2027 in both languages, with shared test bytes so RobotPy and Java can't drift apart. See `docs/wpilib-2027.md`.
 - CI runs on every push: Owl, Tusk (both languages, both seasons), NT interop across seasons, the GPU C API in CPU mode, and a CUDA compile-only build for sm_87. The CUDA build compiles and links with nvcc 12.6 and CMake 3.26+.
+- The GPU C API passed `tools/validate_gpu.sh` and the Jetson checklist on the team's Orin Nano (JetPack 6.2.1), after a Colab T4 and an ARM64 EC2 `g5g.xlarge`. See the status in `native/gpu_detector/capi/README.md`.
 
 ## Next
 
-1. First run on a Jetson: `bash tools/validate_gpu.sh`, then the Jetson checklist in `native/gpu_detector/capi/README.md`. (The same script has passed on a Colab T4 and on an ARM64 EC2 `g5g.xlarge`; see the status in that README. A Jetson is the only platform left.)
-2. Jetson benchmarks with the same cameras, comparing fps and `processMs` per camera between the CPU and `cuda` backends. Write results to `docs/benchmarks.md`.
-3. Orange Pi regression run: Choate's two OV2311s on the restructured code.
-4. Raw gray capture for USB3 global-shutter cameras: skip MJPEG and the color conversion, and hand gray frames straight to the detector.
-5. Camera pose instead of robot pose: Owl sends the camera's field pose, and Tusk applies the robot-to-camera transform. This allows moving cameras and live pitch fudge tuning (from 6328's Northstar). It's a struct change: bump to `VisionObservationV4`.
-6. Match video recording with overlays when the FMS is attached.
-7. Health alerts that tell "disconnected" apart from "connected but no frames".
+1. Jetson benchmarks with the same cameras, comparing fps and `processMs` per camera between the CPU and `cuda` backends. Write results to `docs/benchmarks.md`.
+2. Orange Pi regression run: Choate's two OV2311s on the restructured code.
+3. Raw gray capture for USB3 global-shutter cameras: skip MJPEG and the color conversion, and hand gray frames straight to the detector.
+4. Camera pose instead of robot pose: Owl sends the camera's field pose, and Tusk applies the robot-to-camera transform. This allows moving cameras and live pitch fudge tuning (from 6328's Northstar). It's a struct change: bump to `VisionObservationV4`.
+5. Match video recording with overlays when the FMS is attached.
+6. Health alerts that tell "disconnected" apart from "connected but no frames".
 
 ## Later
 

@@ -13,6 +13,8 @@ Both halves work with WPILib 2026 and 2027. See [docs/wpilib-2027.md](docs/wpili
 cameras ──► Owl (Orange Pi / Jetson) ──NT4: /Vision/observations──► Tusk (roboRIO / Systemcore) ──► pose estimator
 ```
 
+![Owl's tuning page on a Jetson Orin Nano: tag 6 outlined in green with a 3D box, the pose line underneath, and the CUDA detector at 80 fps](docs/images/owl-tuning.png)
+
 ## Quick start
 
 ### Coprocessor (Owl)
